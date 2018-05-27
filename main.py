@@ -35,7 +35,7 @@ class process_exit(Thread):
 		self.start()
 	def run(self):
 		r = ''
-		print("\rProgram is now running, input `exit\' to exit program")
+		print("\rProgram is now running, type `exit\' to exit program")
 		while r != 'exit':
 			try:
 				r = input()
@@ -65,6 +65,7 @@ def main():
 		config['forward']['bypass_list'] = repr(bypass_list)
 		print('[{}] add except id:{}'.format(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
 			msg['text'][3:]))
+
 	@app.on_message()
 	def passfunction(_, __):
 		pass
