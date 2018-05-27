@@ -1,0 +1,8 @@
+[account]
+api_id = 
+api_hash = 
+
+[forward]
+to = 
+filter = Filters.media & ~Filters.sticker
+bypass_list = (0, 1)
