@@ -2,7 +2,7 @@
 
 Forward message what you need.
 
-# Runtime environment
+## Runtime environment
 
 In principle, need python 3.6.x interpreter
 
@@ -31,5 +31,6 @@ You should have received a copy of the GNU Affero General Public License along w
 
 ### This program also uses the following open source programs
 
-Pyrogram v0.7.4, Copyright (C) 2017-2018 Dan Tès <https://github.com/delivrance>
+Pyrogram, Copyright (C) 2017-2018 Dan Tès <https://github.com/delivrance>
+
 Licensed under the terms of the GNU Lesser General Public License v3 or later (LGPLv3+)

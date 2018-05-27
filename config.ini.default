@@ -1,8 +1,9 @@
 [account]
 api_id = 
 api_hash = 
+owner = 
 
 [forward]
-to = 
-filter = Filters.media & ~Filters.sticker
-bypass_list = (0, 1)
+to = -
+filter = Filters.media & ~Filters.voice 
+bypass_list = [0, 1]
