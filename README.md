@@ -2,19 +2,32 @@
 
 Forward message what you need.
 
+## Notice
+
+This version is not incompatible with previous versions.
+
 ## Runtime environment
 
-In principle, need python 3.6.x interpreter
+In principle, need python 3.4.x interpreter
 
 The following libraries are required:
 
 - pyrogram
 
+## Feature
+
+* Full support any media
+* Using MySQL engine to check file is duplicated (document and file is not support now)
+* Can query entire group or channel
+* Blacklist and special forwrad support
+* Using forward system to control forward action, custom time interval
+* Log to file supported
+
 ## How to use
 
 * Copy `config.ini.default` to `config.ini`
 * Parse api id and api hash from [telegram](https://my.telegram.org/apps)
-* Edit filter and forward target which you want to forward
+* Edit forward target
 * Run `main.py`
 
 ## License

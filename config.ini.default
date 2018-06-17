@@ -1,9 +1,27 @@
 [account]
-api_id = 
-api_hash = 
-owner = 
+api_id =
+api_hash =
+owner =
 
 [forward]
-to = -
-filter = Filters.media & ~Filters.voice 
-bypass_list = [0, 1]
+to_photo =
+to_video =
+to_other =
+bot_for =
+to_anime =
+query_photo =
+query_video =
+bypass_list = []
+black_list = []
+special = {}
+
+[mysql]
+username =
+passwd =
+database =
+table =
+
+[log]
+log_level = INFO
+log_file = log.txt
+pre_print = stdout

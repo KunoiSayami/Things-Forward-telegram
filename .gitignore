@@ -105,3 +105,6 @@ venv.bak/
 
 *.ini
 *.session
+
+# runtime files
+forward_list
