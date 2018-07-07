@@ -2,6 +2,9 @@
 api_id =
 api_hash =
 owner =
+auth_users = []
+auth_code = 
+group_id =
 
 [forward]
 to_photo =
@@ -14,6 +17,7 @@ query_video =
 bypass_list = []
 black_list = []
 special = {}
+to_blacklist =
 
 [mysql]
 username =

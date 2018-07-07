@@ -1,0 +1,3 @@
+[submodule "libpy3"]
+	path = libpy3
+	url = http://github.com/Too-Naive/libpy3.git

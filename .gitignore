@@ -108,3 +108,4 @@ venv.bak/
 
 # runtime files
 forward_list
+*.json
