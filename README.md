@@ -4,9 +4,11 @@ Automatically forward the target message
 
 ## Note
 
-This version is not incompatible with previous versions.
+This major version is not compatible with previous major versions.
 
 Technical support for previous versions is no longer provided.
+
+If you want to upate to the latest version, please update the configuration file according to `config.ini.default`.
 
 ## Operating Environment
 
@@ -26,6 +28,10 @@ The following libraries are required:
 * The time interval for message forwarding is customized to avoid certain risks including banned accounts
 * Logging function is supported
 * Add blacklists in batches (Deprecated)
+* Prevent possible loss of configuration files by writing configuration files by command at runtime.
+* Set up forwarding and recover blacklists in a more convenient way.
+* Forward the warning messages in the log to a specified group.
+* Document chanel only handles forwarding video and image files.
 * If you have the authorized password, you can send authorized code to the bot account to get the permission
 * By using command lines, users can delete all the messages from a certain user in the blacklist.
 
