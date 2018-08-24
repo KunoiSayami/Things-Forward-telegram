@@ -28,21 +28,15 @@ def get_the_fucking_id(msg):
 	return r if r is not None else msg['chat']['id']
 
 def get_the_fucking_id_ex(msg, f=None):
-	try:
-		return msg['forward_from_chat']['id']
-	except (TypeError, KeyError):
-		pass
-	try:
-		return msg['forward_from']['id']
-	except (TypeError, KeyError):
-		return f
+	if msg.forward_from_chat: return msg.forward_from_chat.id
+	if msg.forward_from: return msg.forward_from.id
+	return f
 
 def get_msg_from(msg):
-	try:
-		return msg['from_user']['id']
-	except (TypeError, KeyError):
-		return msg['chat']['id']
+	return msg.from_user.id if msg.from_user else msg.chat.id
 
 def is_bot(msg):
-	return any((get_msg_key(msg, 'from_user', 'is_bot'),
-		get_msg_key(msg, 'forward_from', 'is_bot')))
+	return any((
+		msg.from_user and msg.from_user.is_bot,
+		msg.forward_from and msg.forward_from.is_bot
+		))
