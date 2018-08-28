@@ -23,11 +23,7 @@ def get_msg_key(msg, key1, key2, f=None):
 	except:
 		return f
 
-def get_the_fucking_id(msg):
-	r = get_the_fucking_id_ex(msg)
-	return r if r is not None else msg['chat']['id']
-
-def get_the_fucking_id_ex(msg, f=None):
+def get_forward_id(msg, f=None):
 	if msg.forward_from_chat: return msg.forward_from_chat.id
 	if msg.forward_from: return msg.forward_from.id
 	return f

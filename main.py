@@ -26,7 +26,7 @@ from libpy3.mysqldb import mysqldb
 from configparser import ConfigParser
 from pymysql.err import ProgrammingError
 from threading import Thread, Lock, Timer
-from pyrogram import Client, Filters, ChatAction, api, Message
+from pyrogram import Client, Filters, ChatAction, api, Message, PhotoSize
 
 global app
 config = ConfigParser()
@@ -42,6 +42,8 @@ authorized_users = eval(config['account']['auth_users'])
 func_blacklist = None
 pre_defined_list = [int(x) for x in [config['forward']['to_photo'], config['forward']['to_video'], config['forward']['to_other'],
 	config['forward']['bot_for'], config['forward']['to_anime']]]
+min_resolution = eval(config['forward']['lowq_resolution']) if config.has_option('forward', 'lowq_resolution') else 200
+custom_switch = False
 #blacklist_keyword = eval(config['forward']['blacklist_keyword'])
 
 class checkfile(mysqldb):
@@ -70,6 +72,9 @@ class checkfile(mysqldb):
 		self.execute("INSERT INTO `msg_detail` (`to_chat`, `to_msg`, `from_chat`, `from_id`, `from_user`, `from_forward`) \
 			VALUES ({}, {}, {}, {}, {}, {})".format(*args))
 		self.commit()
+	@staticmethod
+	def check_photo(photo: PhotoSize):
+		return photo.file_size / (photo.width * photo.height) * 1000 < min_resolution or photo.file_size < 40960
 
 checker = checkfile()
 
@@ -114,9 +119,8 @@ class forward_thread(Thread):
 			target_id, chat_id, msg_id, Loginfo, msg_raw = self.get()
 			try:
 				r = self.client.forward_messages(target_id, chat_id, msg_id, True)
-				#assert r['chat']['id'] == target_id
 				checker.insert_log(r['chat']['id'], r['message_id'], msg_raw['chat']['id'],
-					msg_raw['message_id'], get_msg_from(msg_raw), get_the_fucking_id_ex(msg_raw, -1))
+					msg_raw['message_id'], get_msg_from(msg_raw), get_forward_id(msg_raw, -1))
 				if Loginfo[0]:
 					Log.info(Loginfo[1], *Loginfo[2:])
 			except ProgrammingError:
@@ -217,11 +221,15 @@ class process_exit(Thread):
 		time.sleep(sleep)
 		with open('config.ini', 'w') as fout: config.write(fout)
 		app.stop()
-		checker.close()
 		forward_thread.switch = False
+		try:
+			checker.close()
+		except:
+			Log.exc()
 		time.sleep(0.5)
 		forward_list = []
 		if not forward_thread.queue.empty():
+			print('Processing forward list')
 			while not forward_thread.queue.empty():
 				target_id, chat_id, msg_id, Loginfo, _ = forward_thread.queue.get_nowait()
 				forward_list.append([target_id, chat_id, msg_id, list(Loginfo), None])
@@ -230,10 +238,11 @@ class process_exit(Thread):
 		os._exit(0)
 	def run(self):
 		print("\rProgram is now running, type `exit\' to exit program")
-		try:
-			while input() != 'exit': pass
-		except:
-			pass
+		while True:
+			try:
+				while input() != 'exit': pass
+				break
+			except:	pass
 		self.exit_process()
 
 class log_track_thread(Thread):
@@ -270,7 +279,7 @@ def get_target(type_name: int or None):
 		}[type_name] if type_name in ['other', 'photo', 'bot', 'video', 'anime', 'gif', 'doc', 'low'] else type_name
 
 def get_predefined_group_list():
-	return list(set(
+	return [int(x) for x in list(set(
 		[config['forward']['to_photo'],
 		config['forward']['to_video'],
 		config['forward']['to_other'],
@@ -279,7 +288,7 @@ def get_predefined_group_list():
 		config['forward']['to_gif'],
 		config['forward']['to_doc'],
 		config['forward']['to_lowq']]
-		))
+		))]
 
 def get_real_forward_target(msg: Message, origin_target: str or int):
 	r = do_spec_forward.get(msg.chat.id)
@@ -329,7 +338,7 @@ def reply_checker_and_del_from_blacklist(client: Client, msg: Message):
 				config['forward']['black_list'] = repr(black_list)
 				client.send_message(msg.chat.id, 'Del {} from blacklist'.format(r.group(1)))
 		else:
-			group_id = get_the_fucking_id(msg.reply_to_message)
+			group_id = msg.reply_to_message.message_id if msg.reply_to_message else None
 			if group_id and group_id in black_list:
 				black_list.remove(group_id)
 				config['forward']['black_list'] = repr(black_list)
@@ -346,7 +355,7 @@ def del_message_by_id(client: Client, msg: Message, send_message_to : int or str
 	if forward_control and config['forward']['to_blacklist'] == '':
 		Log.error('Request forward but blacklist channel not specified')
 		return
-	id_from_reply = get_the_fucking_id_ex(msg['reply_to_message'])
+	id_from_reply = get_forward_id(msg['reply_to_message'])
 	q = checker.query("SELECT * FROM `msg_detail` WHERE (`from_chat` = {} OR `from_user` = {} OR `from_forward` = {}) AND `to_chat` != {}".format(
 		id_from_reply, id_from_reply, id_from_reply, int(config['forward']['to_blacklist'])))
 	if send_message_to:
@@ -383,17 +392,17 @@ def main():
 		except:
 			Log.exc()
 
-	@app.on_message(Filters.chat([int(x) for x in get_predefined_group_list()]) & Filters.text & Filters.reply)
+	@app.on_message(Filters.chat(get_predefined_group_list()) & Filters.text & Filters.reply)
 	def get_command_from_target(client: Client, msg: Message):
 		if re.match(r'^\/(del(f)?|b|undo)$', msg.text):
 			if msg.text == '/b':
 				#client.delete_messages(msg.chat.id, msg.message_id)
-				add_black_list(get_the_fucking_id_ex(msg['reply_to_message']),
+				add_black_list(get_forward_id(msg['reply_to_message']),
 					(client, int(get_msg_key(config, 'account', 'group_id', -1))))
 				# To enable delete message, please add `delete other messages' privilege to bot
 				call_delete_msg(30, client.delete_messages, msg.chat.id, (msg['message_id'], msg['reply_to_message']['message_id']))
 			elif msg.text == '/undo':
-				group_id = get_the_fucking_id(msg.reply_to_message)
+				group_id = msg.reply_to_message.message_id if msg.reply_to_message else None
 				if group_id:
 					try:
 						black_list.remove(group_id)
@@ -403,14 +412,14 @@ def main():
 						client.send_message(int(get_msg_key(config, 'account', 'group_id', -1)), '`{}` not in blacklist'.format(group_id), parse_mode='markdown')
 			else:
 				call_delete_msg(20, client.delete_messages, msg.chat.id, msg['message_id'])
-				if get_the_fucking_id_ex(msg['reply_to_message']):
+				if get_forward_id(msg['reply_to_message']):
 					del_message_by_id(client, msg, get_msg_key(config, 'account', 'group_id', None), msg.text[-1] == 'f')
 
 	@app.on_message(Filters.photo & ~Filters.private & ~Filters.chat([int(config['forward']['to_photo']), int(config['forward']['to_lowq'])]))
 	def handle_photo(client: Client, msg: Message):
 		if msg.chat.id in bypass_list or not checker.checkFile((msg.photo[0].file_id,)):
 			return
-		forward_msg(msg, (config['forward']['to_photo'] if msg.photo[-1].file_size > 51200 else config['forward']['to_lowq']))
+		forward_msg(msg, config['forward']['to_photo'] if checker.check_photo(msg.photo[-1]) else config['forward']['to_lowq'])
 
 	@app.on_message(Filters.video & ~Filters.private & ~Filters.chat(int(config['forward']['to_video'])))
 	def handle_video(client: Client, msg: Message):
@@ -431,14 +440,14 @@ def main():
 		forward_target = config['forward']['to_doc'] if '/' in msg.document.mime_type and msg.document.mime_type.split('/')[0] in ('image', 'video') else config['forward']['to_other']
 		forward_msg(msg, forward_target, 'doc' if forward_target != config['forward']['to_other'] else 'other')
 
-	@app.on_message(Filters.chat([int(x) for x in get_predefined_group_list()]))
-	def throw_func(_: Client, _1: Message): pass
+	@app.on_message(Filters.chat(get_predefined_group_list()))
+	def throw_func(*_): pass
 
 	@app.on_message(Filters.media & ~Filters.private & ~Filters.sticker & ~Filters.voice)
 	def handle_other(client: Client, msg: Message):
 		forward_msg(msg, config['forward']['to_other'], 'other')
 
-	@app.on_message(Filters.command("e"))
+	@app.on_message(Filters.command("e") & Filters.private)
 	def add_Except(client: Client, msg: Message):
 		client.send(api.functions.messages.ReadHistory(client.resolve_peer(msg.chat.id), msg.message_id))
 		if len(msg.text) < 4 or not user_checker(msg):
@@ -450,7 +459,7 @@ def main():
 		client.send_message(msg.chat.id, 'Add `{}` to bypass list'.format(msg.text[3:]), parse_mode='markdown')
 		Log.info('add except id:{}', msg.text[3:])
 
-	@app.on_message(Filters.command('q'))
+	@app.on_message(Filters.command('q') & Filters.private)
 	def process_query(client: Client, msg: Message):
 		client.send(api.functions.messages.ReadHistory(client.resolve_peer(msg.chat.id), msg.message_id))
 		r = re.match(r'^\/q (-?\d+)(d)?$', msg.text)
@@ -458,7 +467,7 @@ def main():
 			return
 		get_history_process(client, msg.chat.id, r.group(1), dirty_run=r.group(2) is not None)
 
-	@app.on_message(Filters.command('b'))
+	@app.on_message(Filters.command('b') & Filters.private)
 	def add_BlackList(client: Client, msg: Message):
 		client.send(api.functions.messages.ReadHistory(client.resolve_peer(msg.chat.id), msg.message_id))
 		if not user_checker(msg): return
@@ -468,7 +477,7 @@ def main():
 			client.send_message(msg.chat.id, "Check your input")
 			Log.exc(False)
 
-	@app.on_message(Filters.command('s'))
+	@app.on_message(Filters.command('s') & Filters.private)
 	def process_show_detail(client: Client, msg: Message):
 		client.send(api.functions.messages.ReadHistory(client.resolve_peer(msg.chat.id), msg.message_id))
 		if not user_checker(msg): return
@@ -476,23 +485,23 @@ def main():
 		echo_switch = not echo_switch
 		client.send_message(msg.chat.id, 'Set echo to {}'.format(echo_switch))
 
-	@app.on_message(Filters.command('f') & Filters.reply)
+	@app.on_message(Filters.command('f') & Filters.reply & Filters.private)
 	def set_forward_target_reply(client: Client, msg: Message):
 		if not user_checker(msg) and msg.reply_to_message.text is not None: return
 		r = re.match(r'^forward_from = (-\d+)$', msg.reply_to_message.text)
-		r1 = re.match(r'^\/f (other|photo|bot|video|anime|gif|doc)$', msg.text)
+		r1 = re.match(r'^\/f (other|photo|bot|video|anime|gif|doc|lowq)$', msg.text)
 		if r is None or r1 is None: return
 		do_spec_forward.update({int(r.group(1)): r1.group(1)})
 		config['forward']['special'] = repr(do_spec_forward)
 		client.send_message(msg.chat.id, 'Set group `{}` forward to `{}`'.format(
 			r.group(1), r1.group(1)), 'markdown')
 
-	@app.on_message(Filters.command('f'))
+	@app.on_message(Filters.command('f') & Filters.private)
 	def set_forward_target(client: Client, msg: Message):
 		client.send(api.functions.messages.ReadHistory(client.resolve_peer(msg.chat.id), msg.message_id))
 		if not user_checker(msg):
 			return
-		r = re.match(r'^\/f (-?\d+) (other|photo|bot|video|anime|gif|doc)$', msg.text)
+		r = re.match(r'^\/f (-?\d+) (other|photo|bot|video|anime|gif|doc|lowq)$', msg.text)
 		if r is None:
 			return
 		do_spec_forward.update({int(r.group(1)): r.group(2)})
@@ -500,7 +509,7 @@ def main():
 		client.send_message(msg.chat.id, 'Set group `{}` forward to `{}`'.format(
 			r.group(1), r.group(2)), 'markdown')
 
-	@app.on_message(Filters.command('a'))
+	@app.on_message(Filters.command('a') & Filters.private)
 	def add_user(client: Client, msg: Message):
 		client.send(api.functions.messages.ReadHistory(client.resolve_peer(msg.chat.id), msg.message_id))
 		r = re.match(r'^/a (.+)$', msg.text)
@@ -510,7 +519,7 @@ def main():
 			config['account']['auth_users'] = repr(list(set(authorized_users)))
 			client.send_message(msg.chat.id, 'Success add to authorized users.')
 
-	@app.on_message(Filters.command('pw'))
+	@app.on_message(Filters.command('pw') & Filters.private)
 	def change_code(client: Client, msg: Message):
 		client.send(api.functions.messages.ReadHistory(client.resolve_peer(msg.chat.id), msg.message_id))
 		if not user_checker(msg):
@@ -520,11 +529,19 @@ def main():
 			config['account']['auth_code'] = r.group(1)
 			client.send_message(msg.chat.id, 'Success changed authorize code.')
 
-	@app.on_message(Filters.command('undo'))
+	@app.on_message(Filters.command('undo') & Filters.private)
 	def undo_blacklist_operation(client: Client, msg: Message):
 		reply_checker_and_del_from_blacklist(client, msg)
 
-	@app.on_message(Filters.command('sd'))
+	@app.on_message(Filters.command('sd2') & Filters.private)
+	def switch_detail2(client: Client, msg: Message):
+		client.send(api.functions.messages.ReadHistory(client.resolve_peer(msg.chat.id), msg.message_id))
+		if not user_checker(msg): return
+		global custom_switch
+		custom_switch = not custom_switch
+		client.send_message(msg.chat.id, 'Switch custom print to {}'.format(custom_switch))
+
+	@app.on_message(Filters.command('sd') & Filters.private)
 	def switch_detail(client: Client, msg: Message):
 		client.send(api.functions.messages.ReadHistory(client.resolve_peer(msg.chat.id), msg.message_id))
 		if not user_checker(msg): return
@@ -532,7 +549,7 @@ def main():
 		detail_msg_switch = not detail_msg_switch
 		client.send_message(msg.chat.id, 'Switch detail print to {}'.format(detail_msg_switch))
 
-	@app.on_message(Filters.command('stop'))
+	@app.on_message(Filters.command('stop') & Filters.private)
 	def callstopfunc(client: Client, msg: Message):
 		client.send(api.functions.messages.ReadHistory(client.resolve_peer(msg.chat.id), msg.message_id))
 		if not user_checker(msg):
@@ -540,7 +557,7 @@ def main():
 		client.send_message(msg.chat.id, 'Exiting...')
 		Thread(target=process_exit.exit_process, args=(2,)).start()
 
-	@app.on_message(Filters.command('help'))
+	@app.on_message(Filters.command('help') & Filters.private)
 	def show_help_message(client: Client, msg: Message):
 		client.send(api.functions.messages.ReadHistory(client.resolve_peer(msg.chat.id), msg.message_id))
 		if not user_checker(msg): return
@@ -553,9 +570,10 @@ def main():
 		/f <chat_id> <target>   Add `chat_id' to specified forward rules
 		/pw <new_password>      Change password to new password
 		/stop                   Stop bot
+		/save                   Save current configure file
 		""")
 
-	@app.on_message(Filters.command('save'))
+	@app.on_message(Filters.command('save') & Filters.private)
 	def save_config(client: Client, msg: Message):
 		client.send(api.functions.messages.ReadHistory(client.resolve_peer(msg.chat.id), msg.message_id))
 		if not user_checker(msg): return
@@ -569,9 +587,14 @@ def main():
 		if not user_checker(msg):
 			return
 		global echo_switch, black_list
+		if custom_switch:
+			obj = msg.photo[-1] if msg.photo else msg.video if msg.video else msg.document if msg.document else msg.gif if msg.gif else None
+			if obj:
+				client.send_message(msg.chat.id, '```{}```'.format(str(obj)), parse_mode='markdown')
+			if msg.photo:
+				client.send_message(msg.chat.id, 'Resolution: `{}`'.format(msg.photo[-1].file_size/(msg.photo[-1].width * msg.photo[-1].height)*1000), parse_mode='markdown')
 		if echo_switch:
-			client.send_message(msg.chat.id, 'forward_from = `{}`'.format(get_the_fucking_id_ex(msg, -1)),
-				parse_mode='markdown')
+			client.send_message(msg.chat.id, 'forward_from = `{}`'.format(get_forward_id(msg, -1)), parse_mode='markdown')
 			if detail_msg_switch: print(msg)
 		if msg.text is None: return
 		r = re.match(r'^Add (-?\d+) to blacklist$', msg.text)
@@ -590,9 +613,10 @@ def main():
 def do_nothing(*args, **kwargs):
 	Log.info('Jump over forward msg from {}', args[0])
 
-#ef early_configure_check():
-#	_config = ConfigParser()
-#	assert len(_config.read('config.ini')) > 0, 'Configure file not found'
+def early_configure_check():
+	_config = ConfigParser()
+	assert len(_config.read('config.ini')) > 0, 'Configure file not found'
+	assert config.has_option('account', 'api_id')
 
 def init():
 	global app, func_blacklist
