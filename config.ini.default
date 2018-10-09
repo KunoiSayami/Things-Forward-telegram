@@ -22,6 +22,7 @@ bypass_list = []
 black_list = []
 special = {}
 to_blacklist =
+lowq_resolution = 
 
 [mysql]
 username =

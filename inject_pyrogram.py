@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# getitem.py
+# inject_pyrogram.py
 # Copyright (C) 2018 Too-Naive
 #
 # This module is part of Things-Forward-telegram and is released under
@@ -17,22 +17,36 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
-def get_msg_key(msg, key1, key2, f=None):
-	try:
-		return msg[key1][key2]
-	except:
-		return f
+from libpy3 import Log
+from pyrogram.client.types.bots import *
+from pyrogram.api.types import (
+    KeyboardButtonUrl, KeyboardButtonCallback,
+    KeyboardButtonSwitchInline
+)
 
-def get_forward_id(msg, f=None):
-	if msg.forward_from_chat: return msg.forward_from_chat.id
-	if msg.forward_from: return msg.forward_from.id
-	return f
+class inject_inline_keyboard_button(InlineKeyboardButton):
+	@staticmethod
+	def read(b, *args):
+		if isinstance(b, KeyboardButtonUrl):
+			return InlineKeyboardButton(
+				text=b.text,
+				url=b.url
+			)
 
-def get_msg_from(msg):
-	return msg.from_user.id if msg.from_user else msg.chat.id
+		if isinstance(b, KeyboardButtonCallback):
+			return InlineKeyboardButton(
+				text=b.text,
+				callback_data=b.data.decode(errors='ignore')
+			)
 
-def is_bot(msg):
-	return any((
-		msg.from_user and msg.from_user.is_bot,
-		msg.forward_from and msg.forward_from.is_bot
-		))
+		if isinstance(b, KeyboardButtonSwitchInline):
+			if b.same_peer:
+				return InlineKeyboardButton(
+					text=b.text,
+					switch_inline_query_current_chat=b.query
+				)
+			else:
+				return InlineKeyboardButton(
+					text=b.text,
+					switch_inline_query=b.query
+				)
