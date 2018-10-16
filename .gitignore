@@ -109,3 +109,7 @@ venv.bak/
 # runtime files
 forward_list
 *.json
+*.py
+!main.py
+!getitem.py
+!inject_pyrogram.py

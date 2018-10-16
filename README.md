@@ -22,7 +22,7 @@ The following libraries are required:
 ## Feature
 
 * Support any media except voice messges.
-* Use MySQL engine to check if the target media is duplicated (Documents and files are not supported currently).
+* Use MySQL engine to check if the target media is duplicated.
 * Collect all the videos and pictures from the target group or channel.
 * Customized forwarding methods including Blacklist.
 * The time interval for message forwarding is customized to avoid certain risks including banned accounts.
@@ -33,7 +33,7 @@ The following libraries are required:
 * Document chanel only handles forwarding video and image files.
 * If you have the authorized password, you can send authorized code to the bot account to get the permission.
 * By using command lines, users can delete all the messages from a certain user in the blacklist.
-* Caption longer than 20 characters will be truncated and re-sent by the bot.
+* Caption longer than 20 characters will be replaced with the sender's user_id and will be re-sent by the bot.
 
 ## How to use
 

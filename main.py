@@ -141,7 +141,9 @@ class forward_thread(Thread):
 				if msg_raw and msg_raw.caption and len(msg_raw.caption) > 20 and target_id != int(config['forward']['to_blacklist']):
 					function = self.get_forward_function(msg_raw)
 					from_id = get_forward_id(msg_raw, get_msg_from(msg_raw))
-					if function is None or from_id is None: raise RuntimeWarning("Can't find message sender")
+					#if function is None or from_id is None: raise RuntimeWarning("Can't find message sender")
+					if function is None: continue
+					if from_id is None: raise RuntimeWarning("Can't find message sender")
 					r = function(target_id, self.get_file_id(msg_raw), base64.standard_b64encode(str(from_id).encode()).decode(), disable_notification=True)
 				else:
 					r = self.client.forward_messages(target_id, chat_id, msg_id, True)
