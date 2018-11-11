@@ -84,10 +84,10 @@ class checkfile(mysqldb):
 checker = checkfile()
 
 class forward_thread(Thread):
-	class id_obj:
+	class id_obj(object):
 		def __init__(self, _id: int):
 			self.id = _id
-	class build_msg:
+	class build_msg(object):
 		def __init__(self, chat_id: int, msg_id: int, from_user_id: int = -1, forward_from_id = -1):
 			self.chat = forward_thread.id_obj(chat_id)
 			self.message_id = msg_id
@@ -104,9 +104,9 @@ class forward_thread(Thread):
 		`Loginfo` structure: (need_log: bool, log_msg: str, args: tulpe)
 	'''
 	def __init__(self, client: Client):
-		Thread.__init__(self)
-		self.daemon = True
+		Thread.__init__(self, daemon=True)
 		self.client = client
+		self.cut_switch = config.has_option('forward', 'cut_long_text') and config['forward']['cut_long_text'] == 'True'
 		self.start()
 	@staticmethod
 	def put_blacklist(from_chat: int, from_id: int, log_control: tuple = (False,), msg_raw: Message or None = None):
@@ -138,7 +138,7 @@ class forward_thread(Thread):
 			target_id, chat_id, msg_id, Loginfo, msg_raw = self.get()
 			try:
 				# Drop long text function
-				if msg_raw and msg_raw.caption and len(msg_raw.caption) > 20 and target_id != int(config['forward']['to_blacklist']):
+				if self.cut_switch and msg_raw and msg_raw.caption and len(msg_raw.caption) > 20 and target_id != int(config['forward']['to_blacklist']):
 					function = self.get_forward_function(msg_raw)
 					from_id = get_forward_id(msg_raw, get_msg_from(msg_raw))
 					#if function is None or from_id is None: raise RuntimeWarning("Can't find message sender")
@@ -357,6 +357,7 @@ def add_black_list(user_id: int or str, process_callback=None):
 	# Check is msg from authorized user
 	if user_checker({'chat':{'id': int(user_id)}}) or user_id is None: raise KeyError
 	if int(user_id) in black_list: return
+	if isinstance(user_id, bytes): user_id = user_id.decode()
 	black_list.append(int(user_id))
 	black_list = list(set(black_list))
 	config['forward']['black_list'] = repr(black_list)
@@ -438,7 +439,7 @@ def main():
 			if msg.text == '/b':
 				#client.delete_messages(msg.chat.id, msg.message_id)
 				for_id = get_forward_id(msg['reply_to_message'])
-				add_black_list(base64.b64decode(msg.reply_to_message.caption.encode()) if for_id is None else for_id,
+				add_black_list(base64.b64decode(msg.reply_to_message.caption.encode()).decode() if for_id is None else for_id,
 					(client, int(get_msg_key(config, 'account', 'group_id', -1))))
 				# To enable delete message, please add `delete other messages' privilege to bot
 				call_delete_msg(30, client.delete_messages, msg.chat.id, (msg['message_id'], msg['reply_to_message']['message_id']))
@@ -647,7 +648,6 @@ def main():
 
 def do_nothing(*args, **kwargs):
 	Log.info('Jump over forward msg from {}', args[0])
-
 
 def init():
 	global app, func_blacklist

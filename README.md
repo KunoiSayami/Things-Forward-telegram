@@ -33,7 +33,7 @@ The following libraries are required:
 * Document chanel only handles forwarding video and image files.
 * If you have the authorized password, you can send authorized code to the bot account to get the permission.
 * By using command lines, users can delete all the messages from a certain user in the blacklist.
-* Caption longer than 20 characters will be replaced with the sender's user_id and will be re-sent by the bot.
+* Caption longer than 20 characters will be replaced with the sender's user_id and will be re-sent by the bot. (Optional)
 
 ## How to use
 
