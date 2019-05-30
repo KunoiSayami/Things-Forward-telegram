@@ -16,7 +16,7 @@ Python 3.4 and above is required
 
 The following libraries are required:
 
-- pyrogram >= 0.8.0
+- pyrogram >= 0.13.0
 - pymysql
 
 ## Feature
@@ -47,7 +47,7 @@ The following libraries are required:
 
 [![](https://www.gnu.org/graphics/agplv3-155x51.png)](https://www.gnu.org/licenses/agpl-3.0.txt)
 
-Copyright (C) 2018 Too-Naive
+Copyright (C) 2018-2019 KunoiSayami
 
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or any later version.
 

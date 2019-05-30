@@ -1,0 +1,2 @@
+pyrogram>=0.13.0
+pymysql

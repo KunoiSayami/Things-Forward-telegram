@@ -105,6 +105,7 @@ venv.bak/
 
 *.ini
 *.session
+.vscode/
 
 # runtime files
 forward_list
@@ -112,4 +113,3 @@ forward_list
 *.py
 !main.py
 !getitem.py
-!inject_pyrogram.py
