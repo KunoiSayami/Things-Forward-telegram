@@ -17,22 +17,36 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
-def get_msg_key(msg, key1, key2, f=None):
+from pyrogram import Message
+def get_msg_key(msg: Message, key1: str, key2: str, fallback: object=None) -> object:
 	try:
 		return msg[key1][key2]
 	except:
-		return f
+		return fallback
 
-def get_forward_id(msg, f=None):
+def get_forward_id(msg: Message, fallback: object=None) -> int:
 	if msg.forward_from_chat: return msg.forward_from_chat.id
 	if msg.forward_from: return msg.forward_from.id
-	return f
+	return fallback
 
-def get_msg_from(msg):
+def get_msg_from(msg: Message) -> int:
 	return msg.from_user.id if msg.from_user else msg.chat.id
 
-def is_bot(msg):
+def is_bot(msg: Message) -> bool:
 	return any((
 		msg.from_user and msg.from_user.is_bot,
 		msg.forward_from and msg.forward_from.is_bot
 		))
+
+class log_struct:
+	def __init__(self, need_log: bool, fmt_log: str = '', *fmt_args):
+		self.need_log = need_log
+		self.fmt_log = fmt_log
+		self.fmt_args = fmt_args
+
+class forward_request:
+	def __init__(self, target_id: int, chat_id: int, msg_id: int or tuple, Log_info: log_struct):
+		self.target_id = target_id
+		self.chat_id = chat_id
+		self.msg_id = msg_id
+		self.Log_info = Log_info

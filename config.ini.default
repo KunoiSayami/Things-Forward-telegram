@@ -29,10 +29,3 @@ username =
 passwd =
 database =
 table =
-
-[log]
-log_level = INFO
-log_file = log.txt
-pre_print = None
-emerg_print =
-emerg_print_to =
