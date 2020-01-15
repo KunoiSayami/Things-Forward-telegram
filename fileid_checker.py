@@ -49,7 +49,7 @@ class _checkfile(mysqldb):
 	@staticmethod
 	def check_photo(photo: Thumbnail) -> bool:
 		return not (photo.file_size / (photo.width * photo.height) * 1000 < _checkfile.min_resolution or photo.file_size < 40960)
-	
+
 	def update_forward_target(self, chat_id: int, target: str):
 		if self.query1("SELECT * FROM `special_forward` WHERE `chat_id` = %s", chat_id):
 			self.execute("UPDATE `special_forward` SET `target` = %s WHERE `chat_id` = %s", (target, chat_id))
@@ -58,6 +58,21 @@ class _checkfile(mysqldb):
 
 	def insert_blacklist(self, user_ids: int or tuple):
 		self.execute("INSERT INTO `blacklist` (`id`) VALUES (%s)", user_ids, isinstance(user_ids, (tuple, list)))
+
+	def remove_blacklist(self, user_id: int):
+		self.execute("DELETE FROM `blacklist` WHERE `id` = %s", user_id)
+
+	def query_admin(self, user_id: int) -> dict:
+		return self.query1("SELECT * FROM `user_list` WHERE `id` = %s", user_id)
+
+	def insert_admin(self, user_id: int):
+		if self.query_admin(user_id):
+			self.execute("UPDATE `user_list` SET `authorized` = 'Y' WHERE `id` = %s", user_id)
+		else:
+			self.execute("INSERT INTO `user_list` (`id`, `authorized`) VALUE (%s, 'Y')", user_id)
+
+	def remove_admin(self, user_id: int):
+		self.execute("UPDATE `user_list` SET `authorized` = 'N' WHERE `id` = %s", user_id)
 
 class checkfile(_checkfile):
 	_instance = None
@@ -69,7 +84,7 @@ class checkfile(_checkfile):
 	def init_instance(host: str, username: str, password: str, database: str) -> _checkfile:
 		checkfile._instance = _checkfile(host, username, password, database)
 		return checkfile._instance
-	
+
 	@staticmethod
 	def close_instance() -> None:
 		checkfile._instance.close()

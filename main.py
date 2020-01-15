@@ -77,7 +77,6 @@ class forward_thread(Thread):
 	def get_status() -> bool:
 		return forward_thread.switch
 	def run(self):
-		while not self.client.is_started: time.sleep(1)
 		while self.get_status():
 			target_id, chat_id, msg_id, Loginfo, msg_raw = self.get()
 			try:
@@ -244,19 +243,18 @@ class bot_controler:
 
 	def reply_checker_and_del_from_blacklist(self, client: Client, msg: Message):
 		try:
-			pending_add = None
+			pending_del = None
 			if msg.reply_to_message.text:
 				r = re.match(r'^Add (-?\d+) to blacklist$', msg.reply_to_message.text)
 				if r and msg.reply_to_message.from_user.id != msg.chat.id:
-					pending_add = r.group(1)
+					pending_del = r.group(1)
 			else:
 				group_id = msg.forward_from.id if msg.forward_from else msg.forward_from_chat.id if msg.forward_from_chat else None
 				if group_id and group_id in black_list:
-					pending_add = group_id
-			if pending_add is not None:
-				if self.redis.srem('for_blacklist', pending_add):
-					# TODO: database operation
-					pass
+					pending_del = group_id
+			if pending_del is not None:
+				if self.redis.srem('for_blacklist', pending_del):
+					self.checker.remove_blacklist(pending_del)
 				client.send_message(self.owner_group_id, 'Remove `{}` from blacklist'.format(group_id), parse_mode='markdown')
 		except:
 			if msg.reply_to_message.text: print(msg.reply_to_message.text)
@@ -267,8 +265,7 @@ class bot_controler:
 		if user_id is None or self.redis.sismember('for_admin', user_id):
 			raise KeyError
 		if self.redis.sadd('for_blacklist', user_id):
-			# TODO: database control
-			pass
+			self.checker.insert_blacklist(user_id)
 		#if int(user_id) in black_list: return
 		#if isinstance(user_id, bytes): user_id = user_id.decode()
 		#black_list.append(int(user_id))
@@ -327,8 +324,7 @@ class bot_controler:
 				if group_id:
 					try:
 						if self.redis.srem('for_admin', group_id):
-							# TODO: database control
-							pass
+							self.checker.remove_admin(group_id)
 						#black_list.remove(group_id)
 						#self.config['forward']['black_list'] = repr(black_list)
 						client.send_message(self.owner_group_id, f'Remove `{group_id}` from blacklist', 'markdown')
@@ -461,14 +457,13 @@ class bot_controler:
 	def _set_forward_target(self, chat_id: int, target: str, msg: Message):
 		self.redis.set(chat_id, target)
 		self.checker.update_forward_target(chat_id, target)
-		msg.reply('Set group `{}` forward to `{}`'.format(chat_id, target), parse_mode='markdown')
+		msg.reply(f'Set group `{chat_id}` forward to `{target}`', parse_mode='markdown')
 
 	def add_user(self, _client: Client, msg: Message):
 		r = re.match(r'^/a (.+)$', msg.text)
 		if r and r.group(1) == self.configure.authorized_code:
 			if self.redis.sadd('for_admin', msg.chat.id):
-				# TODO: database operation
-				pass
+				self.checker.insert_admin(msg.chat.id)
 			msg.reply('Success add to authorized users.')
 
 	def change_code(self, _client: Client, msg: Message):

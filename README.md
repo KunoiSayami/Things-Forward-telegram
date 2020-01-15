@@ -16,8 +16,9 @@ Python 3.4 and above is required
 
 The following libraries are required:
 
-- pyrogram >= 0.13.0
+- pyrogram == 0.16.0
 - pymysql
+- redis
 
 ## Feature
 
