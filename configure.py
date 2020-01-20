@@ -30,9 +30,9 @@ class _configure:
 		self._bot_for = config.getint('forward', 'bot_for')
 		self._to_blacklist = config.getint('forward', 'to_blacklist', fallback=None)
 
-		self._query_photo = config.getint('forward', 'query_photo')
-		self._query_video = config.getint('forward', 'query_video')
-		self._query_doc = config.getint('forward', 'query_doc')
+		self._query_photo = config.getint('forward', 'query_photo', fallback=-1)
+		self._query_video = config.getint('forward', 'query_video', fallback=-1)
+		self._query_doc = config.getint('forward', 'query_doc', fallback=-1)
 
 		self._authorized_code = config.get('account', 'auth_code', fallback=None)
 	

@@ -54,7 +54,7 @@ class _checkfile(mysqldb):
 		if self.query1("SELECT * FROM `special_forward` WHERE `chat_id` = %s", chat_id):
 			self.execute("UPDATE `special_forward` SET `target` = %s WHERE `chat_id` = %s", (target, chat_id))
 		else:
-			self.execute("INSERT INTO `special_forward` (`chat_id`, `target`) VALUE (%s, %s)", (target, chat_id))
+			self.execute("INSERT INTO `special_forward` (`chat_id`, `target`) VALUE (%s, %s)", (chat_id, target))
 
 	def insert_blacklist(self, user_ids: int or tuple):
 		self.execute("INSERT INTO `blacklist` (`id`) VALUES (%s)", user_ids, isinstance(user_ids, (tuple, list)))
@@ -62,17 +62,35 @@ class _checkfile(mysqldb):
 	def remove_blacklist(self, user_id: int):
 		self.execute("DELETE FROM `blacklist` WHERE `id` = %s", user_id)
 
-	def query_admin(self, user_id: int) -> dict:
+	def query_user(self, user_id: int) -> dict:
 		return self.query1("SELECT * FROM `user_list` WHERE `id` = %s", user_id)
 
+	def insert_bypass(self, user_id: int):
+		if self.query_user(user_id):
+			self.execute("UPDATE `user_list` SET `bypass` = 'Y' WHERE `id` = %s", user_id)
+		else:
+			self.execute("INSERT INTO `user_list` (`id`, `bypass`) VALUE (%s, 'Y')", user_id)
+
 	def insert_admin(self, user_id: int):
-		if self.query_admin(user_id):
+		if self.query_user(user_id):
 			self.execute("UPDATE `user_list` SET `authorized` = 'Y' WHERE `id` = %s", user_id)
 		else:
 			self.execute("INSERT INTO `user_list` (`id`, `authorized`) VALUE (%s, 'Y')", user_id)
 
 	def remove_admin(self, user_id: int):
 		self.execute("UPDATE `user_list` SET `authorized` = 'N' WHERE `id` = %s", user_id)
+	
+	def query_all_admin(self) -> list:
+		return [x['id'] for x in self.query("SELECT `id` FROM `user_list` WHERE `authorized` = 'Y'")]
+
+	def query_all_bypass(self) -> list:
+		return [x['id'] for x in self.query("SELECT `id` FROM `user_list` WHERE `bypass` = 'Y'")]
+	
+	def query_all_blacklist(self) -> list:
+		return [x['id'] for x in self.query("SELECT `id` FROM `blacklist`")]
+
+	def query_all_special_forward(self) -> dict:
+		return {x['chat_id']: x['target'] for x in self.query("SELECT * FROM `special_forward`")}
 
 class checkfile(_checkfile):
 	_instance = None

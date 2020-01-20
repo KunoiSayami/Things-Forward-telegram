@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# main.py
-# Copyright (C) 2018-2019 KunoiSayami
+# forward.py
+# Copyright (C) 2018-2020 KunoiSayami
 #
 # This module is part of Things-Forward-telegram and is released under
 # the AGPL v3 License: https://www.gnu.org/licenses/agpl-3.0.txt
@@ -20,8 +20,9 @@
 import re, time
 from queue import Queue
 from configparser import ConfigParser
-from threading import Thread, Lock, Timer
+from threading import Thread, Timer
 import logging
+import random, string
 from pymysql.err import ProgrammingError
 import redis
 from pyrogram import Client, Filters, api, Message, MessageHandler, \
@@ -77,6 +78,7 @@ class forward_thread(Thread):
 	def get_status() -> bool:
 		return forward_thread.switch
 	def run(self):
+		while not self.client.is_connected: time.sleep(1)
 		while self.get_status():
 			target_id, chat_id, msg_id, Loginfo, msg_raw = self.get()
 			try:
@@ -85,8 +87,8 @@ class forward_thread(Thread):
 					msg_raw = self.build_msg(chat_id, msg_id)
 				self.checker.insert_log(r.chat.id, r.message_id, msg_raw.chat.id,
 					msg_raw.message_id, get_msg_from(msg_raw), get_forward_id(msg_raw, -1))
-				if Loginfo[0]:
-					self.logger.info(Loginfo[1], *Loginfo[2:])
+				if Loginfo.need_log:
+					self.logger.info(Loginfo.fmt_log, *Loginfo.fmt_args)
 			except ProgrammingError:
 				logger.exception("Got programming error in forward thread")
 			except pyrogram.errors.exceptions.bad_request_400.MessageIdInvalid:
@@ -94,7 +96,7 @@ class forward_thread(Thread):
 			except:
 				print(target_id, chat_id, msg_id, None if msg_raw is None else 'NOT_NONE' , Loginfo)
 				if msg_raw is not None and target_id != self.configure.blacklist:
-					print(msg_raw)
+					print(repr(msg_raw))
 				#self.put(target_id, chat_id, msg_id, Loginfo, msg_raw)
 				logger.exception('Got other exceptions in forward thread')
 			time.sleep(0.5)
@@ -176,6 +178,8 @@ def build_log(chat_id: int, message_id: int, from_user_id: int, froward_from_id:
 	return {'chat': {'id': chat_id}, 'message_id': message_id, 'from_user':{'id': from_user_id},
 		'forward_from_chat': {'id': froward_from_id}}
 
+class UnsupportType(Exception): pass
+
 class bot_controler:
 	def __init__(self):
 		config = ConfigParser()
@@ -187,41 +191,41 @@ class bot_controler:
 			config.get('account', 'api_id'),
 			config.get('account', 'api_hash')
 		)
-		self.checker = checkfile.init_instance(config.get('mysql', 'host'), config.get('mysql', 'username'), config.get('mysql', 'password'), config.get('mysql', 'database'))
-		self.redis.sadd('for_bypass', *list(map(int, config.get('forward', 'bypass_list')[1:-1].split(','))))
-		self.redis.sadd('for_blacklist', *list(map(int, config.get('forward', 'black_list')[1:-1].split(','))))
+		self.redis_prefix = ''.join(random.choices(string.ascii_lowercase, k=5))
+		self.checker = checkfile.init_instance(config.get('mysql', 'host'), config.get('mysql', 'username'), config.get('mysql', 'passwd'), config.get('mysql', 'database'))
+		self.redis.sadd(f'{self.redis_prefix}for_bypass', *self.checker.query_all_bypass())
+		self.redis.sadd(f'{self.redis_prefix}for_blacklist', *self.checker.query_all_blacklist())
 		#self.bypass_list = [int(x) for x in eval(self.config['forward']['bypass_list'])]
 		#self.black_list = [int(x) for x in eval(self.config['forward']['black_list'])]
-		self.redis.mset(dict(map(lambda x: config.get('forward', 'special').split(': '), config.get('forward', 'special')[1:-1].replace('\'', '').split(', '))))
+		self.redis.mset(self.checker.query_all_special_forward())
 		#self.do_spec_forward = eval(config['forward']['special'])
 		self.echo_switch = False
 		self.detail_msg_switch = False
 		#black_list_listen_mode = False # Deprecated
 		self.delete_blocked_message_after_blacklist = False
 		#self.authorized_users = eval(self.config['account']['auth_users'])
-		self.redis.sadd('for_admin', *list(map(int, config.get('forward', 'auth_users')[1:-1].split(','))))
-		self.redis.sadd('for_admin', config.getint('account', 'owner'))
+		self.redis.sadd(f'{self.redis_prefix}for_admin', *self.checker.query_all_admin())
+		self.redis.sadd(f'{self.redis_prefix}for_admin', config.getint('account', 'owner'))
 		self.func_blacklist = None
 		if self.configure.blacklist:
 			self.func_blacklist = forward_thread.put_blacklist
 		self.min_resolution = config.getint('forward', 'lowq_resolution', fallback=120)
 		#self.min_resolution = eval(self.config['forward']['lowq_resolution']) if self.config.has_option('forward', 'lowq_resolution') else 120
 		self.custom_switch = False
-		#blacklist_keyword = eval(config['forward']['blacklist_keyword'])
-		self.restart_require = False
 		self.forward_thread = forward_thread(self.app)
 		self.owner_group_id = config.getint('account', 'group_id', fallback=-1)
+		self.init_handle()
 
 	def init_handle(self):
 		self.app.add_handler(MessageHandler(self.get_msg_from_owner_group,			Filters.chat(self.owner_group_id) & Filters.reply))
 		self.app.add_handler(MessageHandler(self.get_command_from_target,			Filters.chat(self.configure.predefined_group_list) & Filters.text & Filters.reply))
 		#self.app.add_handler(MessageHandler(self.do_nothing, 						Filters.chat(self.configure.predefined_group_list)))
-		self.app.add_handler(MessageHandler(self.pre_check, 						Filters.media & ~Filters.private & ~Filters.sticker & ~Filters.voice))
+		self.app.add_handler(MessageHandler(self.pre_check, 						Filters.media & ~Filters.private & ~Filters.sticker & ~Filters.voice & ~Filters.web_page))
 		self.app.add_handler(MessageHandler(self.handle_photo,						Filters.photo & ~Filters.private & ~Filters.chat([self.configure.photo, self.configure.lowq])))
 		self.app.add_handler(MessageHandler(self.handle_video,						Filters.video & ~Filters.private & ~Filters.chat(self.configure.video)))
 		self.app.add_handler(MessageHandler(self.handle_gif,						Filters.animation & ~Filters.private & ~Filters.chat(self.configure.gif)))
 		self.app.add_handler(MessageHandler(self.handle_document,					Filters.document & ~Filters.private & ~Filters.chat(self.configure.doc)))
-		self.app.add_handler(MessageHandler(self.handle_other,						Filters.media & ~Filters.private & ~Filters.sticker & ~Filters.voice))
+		self.app.add_handler(MessageHandler(self.handle_other,						Filters.media & ~Filters.private & ~Filters.sticker & ~Filters.voice & ~Filters.web_page))
 		self.app.add_handler(MessageHandler(self.pre_private,						Filters.private))
 		self.app.add_handler(MessageHandler(self.add_Except,						Filters.command('e') & Filters.private))
 		self.app.add_handler(MessageHandler(self.process_query,						Filters.command('q') & Filters.private))
@@ -238,8 +242,8 @@ class bot_controler:
 		self.app.add_handler(MessageHandler(self.show_help_message,					Filters.command('help') & Filters.private))
 		self.app.add_handler(MessageHandler(self.process_private,					Filters.private))
 
-	def user_checker(self, msg: Message):
-		self.redis.sismember('for_admin', msg.chat.id)
+	def user_checker(self, msg: Message) -> bool:
+		return self.redis.sismember(f'{self.redis_prefix}for_admin', msg.chat.id)
 
 	def reply_checker_and_del_from_blacklist(self, client: Client, msg: Message):
 		try:
@@ -253,7 +257,7 @@ class bot_controler:
 				if group_id and group_id in black_list:
 					pending_del = group_id
 			if pending_del is not None:
-				if self.redis.srem('for_blacklist', pending_del):
+				if self.redis.srem(f'{self.redis_prefix}for_blacklist', pending_del):
 					self.checker.remove_blacklist(pending_del)
 				client.send_message(self.owner_group_id, 'Remove `{}` from blacklist'.format(group_id), parse_mode='markdown')
 		except:
@@ -262,17 +266,11 @@ class bot_controler:
 
 	def add_black_list(self, user_id: int, post_back_id=None):
 		# Check is msg from authorized user
-		if user_id is None or self.redis.sismember('for_admin', user_id):
+		if user_id is None or self.redis.sismember(f'{self.redis_prefix}for_admin', user_id):
 			raise KeyError
-		if self.redis.sadd('for_blacklist', user_id):
+		if self.redis.sadd(f'{self.redis_prefix}for_blacklist', user_id):
 			self.checker.insert_blacklist(user_id)
-		#if int(user_id) in black_list: return
-		#if isinstance(user_id, bytes): user_id = user_id.decode()
-		#black_list.append(int(user_id))
-		#black_list = list(set(black_list))
-		#config['forward']['black_list'] = repr(black_list)
 		logger.info('Add %d to blacklist', user_id)
-		#save_config_Thread(config)
 		if post_back_id is not None:
 			self.app.send_message(post_back_id, 'Add `{}` to blacklist'.format(user_id),
 				parse_mode='markdown')
@@ -323,7 +321,7 @@ class bot_controler:
 				group_id = msg.reply_to_message.message_id if msg.reply_to_message else None
 				if group_id:
 					try:
-						if self.redis.srem('for_admin', group_id):
+						if self.redis.srem(f'{self.redis_prefix}for_admin', group_id):
 							self.checker.remove_admin(group_id)
 						#black_list.remove(group_id)
 						#self.config['forward']['black_list'] = repr(black_list)
@@ -343,6 +341,13 @@ class bot_controler:
 
 	@staticmethod
 	def get_file_type(msg: Message) -> str:
+		s = bot_controler._get_file_type(msg)
+		if s == 'error':
+			raise UnsupportType()
+		return s
+
+	@staticmethod
+	def _get_file_type(msg: Message) -> str:
 		return 'photo' if msg.photo else \
 			'video' if msg.video else \
 			'animation' if msg.animation else \
@@ -354,15 +359,19 @@ class bot_controler:
 			'text' if msg.text else 'error'
 
 	def pre_check(self, _client: Client, msg: Message):
-		if self.redis.sismember('for_bypass', msg.chat.id) or not self.checker.checkFile(self.get_file_id(msg, self.get_file_type(msg))):
-			return
-		raise ContinuePropagation
+		try:
+			if self.redis.sismember(f'{self.redis_prefix}for_bypass', msg.chat.id) or not self.checker.checkFile(self.get_file_id(msg, self.get_file_type(msg))):
+				return
+		except UnsupportType:
+			pass
+		else:
+			raise ContinuePropagation
 
 	def blacklist_checker(self, msg: Message):
-		return self.redis.sismember('for_blacklist', msg.chat.id) or \
-				(msg.from_user and self.redis.sismember('for_blacklist', msg.from_user.id)) or \
-				(msg.forward_from and self.redis.sismember('for_blacklist', msg.forward_from.id)) or \
-				(msg.forward_from_chat and self.redis.sismember('for_blacklist', msg.forward_from_chat.id))
+		return self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.chat.id) or \
+				(msg.from_user and self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.from_user.id)) or \
+				(msg.forward_from and self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.forward_from.id)) or \
+				(msg.forward_from_chat and self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.forward_from_chat.id))
 
 	@staticmethod
 	def do_nothing(*args):
@@ -374,11 +383,14 @@ class bot_controler:
 			self.func_blacklist(msg.chat.id, msg.message_id, log_struct(True, 'forward blacklist context %s from %s (id: %d)', what, msg.chat.title, msg.chat.id), msg)
 			return
 		forward_target = to
+		#spec_target = None if what == 'other' else self.redis.get(f'{self.redis_prefix}{msg.chat.id}')
 		spec_target = None if what == 'other' else self.redis.get(msg.chat.id)
 		if spec_target is None:
-			spec_target = self.redis.get(msg.forward_from_chat.id)
+			#spec_target = self.redis.get(f'{self.redis_prefix}{msg.forward_from_chat.id}')
+			if msg.forward_from_chat:
+				spec_target = self.redis.get(msg.forward_from_chat.id)
 		if spec_target is not None:
-			forward_target = getattr(self.configure, spec_target)
+			forward_target = getattr(self.configure, spec_target.decode())
 		elif is_bot(msg):
 			forward_target = self.configure.bot
 		self.forward_thread.put(forward_target,
@@ -386,7 +398,6 @@ class bot_controler:
 
 	def handle_photo(self, _client: Client, msg: Message):
 		self.forward_msg(msg, self.configure.photo if self.checker.check_photo(msg.photo.thumbs[-1]) else self.configure.lowq)
-		#self.forward_msg(msg, self.config['forward']['to_photo'] if checker.check_photo(msg.photo) else self.config['forward']['to_lowq'])
 
 	def handle_video(self, _client: Client, msg: Message):
 		self.forward_msg(msg, self.configure.video, 'video')
@@ -413,7 +424,7 @@ class bot_controler:
 		if len(msg.text) < 4:
 			return
 		#bypass_list.append(int(msg.text[3:]))
-		if self.redis.sadd('for_bypass', msg.text[3:]):
+		if self.redis.sadd(f'{self.redis_prefix}for_bypass', msg.text[3:]):
 			pass
 		#bypass_list = list(set(bypass_list))
 		#self.config['forward']['bypass_list'] = repr(bypass_list)
@@ -455,6 +466,7 @@ class bot_controler:
 		self._set_forward_target(r.group(1), r.group(2), msg)
 
 	def _set_forward_target(self, chat_id: int, target: str, msg: Message):
+		#self.redis.set(f'{self.redis_prefix}{chat_id}', target)
 		self.redis.set(chat_id, target)
 		self.checker.update_forward_target(chat_id, target)
 		msg.reply(f'Set group `{chat_id}` forward to `{target}`', parse_mode='markdown')
@@ -462,7 +474,7 @@ class bot_controler:
 	def add_user(self, _client: Client, msg: Message):
 		r = re.match(r'^/a (.+)$', msg.text)
 		if r and r.group(1) == self.configure.authorized_code:
-			if self.redis.sadd('for_admin', msg.chat.id):
+			if self.redis.sadd(f'{self.redis_prefix}for_admin', msg.chat.id):
 				self.checker.insert_admin(msg.chat.id)
 			msg.reply('Success add to authorized users.')
 
@@ -514,6 +526,7 @@ class bot_controler:
 
 	def start(self):
 		self.app.start()
+		self.forward_thread.start()
 
 	def idle(self):
 		self.app.idle()
