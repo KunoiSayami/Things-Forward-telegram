@@ -28,22 +28,23 @@ import redis
 from pyrogram import Client, Filters, api, Message, MessageHandler, \
 	ContinuePropagation
 import pyrogram.errors
-from utils import get_forward_id, get_msg_from, is_bot, log_struct, forward_request
+from utils import get_forward_id, get_msg_from, is_bot, LogStruct, ForwardRequest, \
+	BlackListForwardRequest
 from fileid_checker import checkfile
 from configure import configure
 
 logger = logging.getLogger('forward_main')
 
-class forward_thread(Thread):
-	class id_obj(object):
+class ForwardThread(Thread):
+	class _IDObject(object):
 		def __init__(self, _id: int):
 			self.id = _id
-	class build_msg(object):
+	class _BuildInMessage(object):
 		def __init__(self, chat_id: int, msg_id: int, from_user_id: int = -1, forward_from_id = -1):
-			self.chat = forward_thread.id_obj(chat_id)
+			self.chat = ForwardThread._IDObject(chat_id)
 			self.message_id = msg_id
-			self.from_user = forward_thread.id_obj(from_user_id)
-			self.forward_from = forward_thread.id_obj(forward_from_id)
+			self.from_user = ForwardThread._IDObject(from_user_id)
+			self.forward_from = ForwardThread._IDObject(forward_from_id)
 	queue = Queue()
 	switch = True
 	'''
@@ -62,42 +63,43 @@ class forward_thread(Thread):
 		self.configure = configure.get_instance()
 		self.logger = logging.getLogger('fwd_thread')
 		log_file_header = logging.FileHandler('log.log')
-		log_file_header.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+		log_file_header.setFormatter(logging.Formatter('[%(asctime)s][%(levelname)s] %(message)s'))
+		self.logger.setLevel(logging.INFO)
 		self.logger.addHandler(log_file_header)
 	@staticmethod
-	def put_blacklist(from_chat: int, from_id: int, log_control: log_struct = (False,), msg_raw: Message or None = None):
-		#forward_thread.put(int(config['forward']['to_blacklist']), from_chat, from_id, log_control, msg_raw)
-		forward_thread.put(configure.get_instance().blacklist, from_chat, from_id, log_control, msg_raw)
+	def put_blacklist(request: BlackListForwardRequest):
+		#ForwardThread.put(int(config['forward']['to_blacklist']), from_chat, from_id, log_control, msg_raw)
+		ForwardThread.put(ForwardRequest.from_super(configure.get_instance().blacklist, request))
 	@staticmethod
-	def put(forward_to: int, from_chat: int, from_id: int, log_control: log_struct = (False,), msg_raw: Message or None = None):
-		forward_thread.queue.put_nowait((forward_to, from_chat, from_id, log_control, msg_raw))
+	def put(request: ForwardRequest):
+		ForwardThread.queue.put_nowait(request)
 	@staticmethod
-	def get() -> tuple:
-		return forward_thread.queue.get()
+	def get() -> ForwardRequest:
+		return ForwardThread.queue.get()
 	@staticmethod
 	def get_status() -> bool:
-		return forward_thread.switch
+		return ForwardThread.switch
 	def run(self):
 		while not self.client.is_connected: time.sleep(1)
 		while self.get_status():
-			target_id, chat_id, msg_id, Loginfo, msg_raw = self.get()
+			request = self.get()
 			try:
-				r = self.client.forward_messages(target_id, chat_id, msg_id, True)
-				if msg_raw is None:
-					msg_raw = self.build_msg(chat_id, msg_id)
-				self.checker.insert_log(r.chat.id, r.message_id, msg_raw.chat.id,
-					msg_raw.message_id, get_msg_from(msg_raw), get_forward_id(msg_raw, -1))
-				if Loginfo.need_log:
-					self.logger.info(Loginfo.fmt_log, *Loginfo.fmt_args)
+				r = request.msg.forward(request.target_id, True)
+				#r = self.client.forward_messages(target_id, chat_id, msg_id, True)
+				#if msg_raw is None:
+				#	msg_raw = self._BuildInMessage(chat_id, msg_id)
+				self.checker.insert_log(r.chat.id, r.message_id, request.msg.chat.id,
+					request.msg.message_id, get_msg_from(request.msg), get_forward_id(request.msg, -1))
+				if request.log.need_log:
+					self.logger.info(request.log.fmt_log, *request.log.fmt_args)
 			except ProgrammingError:
 				logger.exception("Got programming error in forward thread")
 			except pyrogram.errors.exceptions.bad_request_400.MessageIdInvalid:
 				pass
 			except:
-				print(target_id, chat_id, msg_id, None if msg_raw is None else 'NOT_NONE' , Loginfo)
-				if msg_raw is not None and target_id != self.configure.blacklist:
-					print(repr(msg_raw))
-				#self.put(target_id, chat_id, msg_id, Loginfo, msg_raw)
+				if request.msg and request.target_id != self.configure.blacklist:
+					print(repr(request.msg))
+				#self.put(target_id, chat_id, msg_id, request.log, msg_raw)
 				logger.exception('Got other exceptions in forward thread')
 			time.sleep(0.5)
 
@@ -163,11 +165,11 @@ class get_history_process(Thread):
 			self.client.send_message(self.configure.query_video, 'Begin {} forward'.format(self.target_id))
 			self.client.send_message(self.configure.query_doc, 'Begin {} forward'.format(self.target_id))
 			for x in reversed(photos):
-				forward_thread.put(self.configure.query_photo if not x[0] else self.configure.bot_for, self.target_id, x[1]['message_id'], msg_raw=x[1])
+				ForwardThread.put(ForwardRequest(self.configure.query_photo if not x[0] else self.configure.bot_for, x[1]))
 			for x in reversed(videos):
-				forward_thread.put(self.configure.query_video if not x[0] else self.configure.bot_for, self.target_id, x[1]['message_id'], msg_raw=x[1])
+				ForwardThread.put(ForwardRequest(self.configure.query_video if not x[0] else self.configure.bot_for, x[1]))
 			for x in reversed(docs):
-				forward_thread.put(self.configure.query_doc if not x[0] else self.configure.bot_for, self.target_id, x[1]['message_id'], msg_raw=x[1])
+				ForwardThread.put(ForwardRequest(self.configure.query_doc if not x[0] else self.configure.bot_for, x[1]))
 		status_thread.setOff()
 		self.client.send_message(self.chat_id, 'Query completed {} photos, {} videos, {} docs{}'.format(len(photos), len(videos), len(docs), ' (Dirty mode)' if self.dirty_run else ''))
 		logger.info('Query %d completed%s, total %d photos, %d videos, %d documents.', self.target_id, ' (Dirty run)' if self.dirty_run else '', len(photos), len(videos), len(docs))
@@ -208,11 +210,11 @@ class bot_controler:
 		self.redis.sadd(f'{self.redis_prefix}for_admin', config.getint('account', 'owner'))
 		self.func_blacklist = None
 		if self.configure.blacklist:
-			self.func_blacklist = forward_thread.put_blacklist
+			self.func_blacklist = ForwardThread.put_blacklist
 		self.min_resolution = config.getint('forward', 'lowq_resolution', fallback=120)
 		#self.min_resolution = eval(self.config['forward']['lowq_resolution']) if self.config.has_option('forward', 'lowq_resolution') else 120
 		self.custom_switch = False
-		self.forward_thread = forward_thread(self.app)
+		self.ForwardThread = ForwardThread(self.app)
 		self.owner_group_id = config.getint('account', 'group_id', fallback=-1)
 		self.init_handle()
 
@@ -287,10 +289,10 @@ class bot_controler:
 		if forward_control:
 			if send_message_to:
 				typing = set_status_thread(client, send_message_to)
-			for x in q:
-				forward_thread.put_blacklist(x['to_chat'], x['to_msg'], msg_raw=build_log(
-					x['from_chat'], x['from_id'], x['from_user'], x['from_forward']))
-			while not forward_thread.queue.empty(): time.sleep(0.5)
+			#for x in q:
+			#	ForwardThread.put_blacklist(x['to_chat'], x['to_msg'], msg_raw=build_log(
+			#		x['from_chat'], x['from_id'], x['from_user'], x['from_forward']))
+			#while not ForwardThread.queue.empty(): time.sleep(0.5)
 			if send_message_to: typing.setOff()
 		for x in q:
 			try: client.delete_messages(x['to_chat'], x['to_msg'])
@@ -380,7 +382,7 @@ class bot_controler:
 	def forward_msg(self, msg: Message, to: int, what: str = 'photo'):
 		if self.blacklist_checker(msg):
 			if msg.from_user and msg.from_user.id == 630175608: return
-			self.func_blacklist(msg.chat.id, msg.message_id, log_struct(True, 'forward blacklist context %s from %s (id: %d)', what, msg.chat.title, msg.chat.id), msg)
+			self.func_blacklist(BlackListForwardRequest(msg, LogStruct(True, 'forward blacklist context %s from %s (id: %d)', what, msg.chat.title, msg.chat.id)))
 			return
 		forward_target = to
 		#spec_target = None if what == 'other' else self.redis.get(f'{self.redis_prefix}{msg.chat.id}')
@@ -393,8 +395,7 @@ class bot_controler:
 			forward_target = getattr(self.configure, spec_target.decode())
 		elif is_bot(msg):
 			forward_target = self.configure.bot
-		self.forward_thread.put(forward_target,
-			msg.chat.id, msg.message_id, log_struct(True, 'forward {} from {} (id: {})', what, msg.chat.title, msg['chat']['id']), msg)
+		self.ForwardThread.put(ForwardRequest(forward_target, msg, LogStruct(True, 'forward %s from %s (id: %d)', what, msg.chat.title, msg.chat.id)))
 
 	def handle_photo(self, _client: Client, msg: Message):
 		self.forward_msg(msg, self.configure.photo if self.checker.check_photo(msg.photo.thumbs[-1]) else self.configure.lowq)
@@ -526,14 +527,14 @@ class bot_controler:
 
 	def start(self):
 		self.app.start()
-		self.forward_thread.start()
+		self.ForwardThread.start()
 
 	def idle(self):
 		self.app.idle()
 
 	def stop(self):
 		self.app.stop()
-		forward_thread.switch = False
+		ForwardThread.switch = False
 		checkfile.close_instance()
 
 

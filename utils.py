@@ -38,15 +38,21 @@ def is_bot(msg: Message) -> bool:
 		msg.forward_from and msg.forward_from.is_bot
 		))
 
-class log_struct:
-	def __init__(self, need_log: bool, fmt_log: str = '', *fmt_args):
+class LogStruct:
+	def __init__(self, need_log: bool, fmt_log: str, *fmt_args):
 		self.need_log = need_log
 		self.fmt_log = fmt_log
 		self.fmt_args = fmt_args
 
-class forward_request:
-	def __init__(self, target_id: int, chat_id: int, msg_id: int or tuple, Log_info: log_struct):
+class BlackListForwardRequest:
+	def __init__(self, msg: Message, log: LogStruct = LogStruct(False, '')):
+		self.msg = msg
+		self.log = log
+
+class ForwardRequest(BlackListForwardRequest):
+	def __init__(self, target_id: int, msg: Message, log: LogStruct = LogStruct(False, '')):
+		super().__init__(msg, log)
 		self.target_id = target_id
-		self.chat_id = chat_id
-		self.msg_id = msg_id
-		self.Log_info = Log_info
+	@staticmethod
+	def from_super(target_id: int, request: BlackListForwardRequest):
+		return ForwardRequest(target_id, request.msg, request.log)
