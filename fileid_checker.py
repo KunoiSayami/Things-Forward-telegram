@@ -18,7 +18,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 from threading import Lock
-from pyrogram import Thumbnail
+from pyrogram import Photo
 from libpy3.mysqldb import mysqldb
 
 class _checkfile(mysqldb):
@@ -26,6 +26,7 @@ class _checkfile(mysqldb):
 	def __init__(self, host: str, username: str, password: str, database: str):
 		self.lock = Lock()
 		super().__init__(host, username, password, database, autocommit=True)
+
 	def check(self, sql: str, exec_sql: str, args=()) -> bool:
 		with self.lock:
 			try:
@@ -36,18 +37,20 @@ class _checkfile(mysqldb):
 					return False
 			except:
 				return False
+
 	def checkFile(self, file_id: str) -> bool:
-		#assert isinstance(args, tuple)
 		return self.check("SELECT `id` FROM `file_id` WHERE `id` = %s",
 			"INSERT INTO `file_id` (`id`,`timestamp`) VALUES (%s, CURRENT_TIMESTAMP())", file_id)
+
 	def checkFile_dirty(self, file_id: str) -> bool:
-		#assert isinstance(args, tuple)
 		return self.query1("SELECT `id` FROM `file_id` WHERE `id` = %s", file_id) is None
+
 	def insert_log(self, *args):
 		self.execute("INSERT INTO `msg_detail` (`to_chat`, `to_msg`, `from_chat`, `from_id`, `from_user`, `from_forward`) \
 			VALUES (%s, %s, %s, %s, %s, %s)", args)
+
 	@staticmethod
-	def check_photo(photo: Thumbnail) -> bool:
+	def check_photo(photo: Photo) -> bool:
 		return not (photo.file_size / (photo.width * photo.height) * 1000 < _checkfile.min_resolution or photo.file_size < 40960)
 
 	def update_forward_target(self, chat_id: int, target: str):
@@ -91,6 +94,9 @@ class _checkfile(mysqldb):
 
 	def query_all_special_forward(self) -> dict:
 		return {x['chat_id']: x['target'] for x in self.query("SELECT * FROM `special_forward`")}
+
+	def query_forward_from(self, chat_id: int, message_id: int) -> dict:
+		return self.query1("SELECT `from_chat`, `from_user`, `from_forward` FROM `msg_detail` WHERE `to_chat` = %s AND `to_msg` = %s", (chat_id, message_id))
 
 class checkfile(_checkfile):
 	_instance = None

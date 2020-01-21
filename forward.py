@@ -55,10 +55,8 @@ class ForwardThread(Thread):
 		`msg_id` : Forward from message id
 		`Loginfo` structure: (need_log: bool, log_msg: str, args: tulpe)
 	'''
-	def __init__(self, client: Client):
+	def __init__(self):
 		super().__init__(daemon=True)
-		self.client = client
-		#self.cut_switch = config.has_option('forward', 'cut_long_text') and config['forward']['cut_long_text'] == 'True'
 		self.checker = checkfile.get_instance()
 		self.configure = configure.get_instance()
 		self.logger = logging.getLogger('fwd_thread')
@@ -66,9 +64,9 @@ class ForwardThread(Thread):
 		log_file_header.setFormatter(logging.Formatter('[%(asctime)s][%(levelname)s] %(message)s'))
 		self.logger.setLevel(logging.INFO)
 		self.logger.addHandler(log_file_header)
+		self.logger.propagate = False
 	@staticmethod
 	def put_blacklist(request: BlackListForwardRequest):
-		#ForwardThread.put(int(config['forward']['to_blacklist']), from_chat, from_id, log_control, msg_raw)
 		ForwardThread.put(ForwardRequest.from_super(configure.get_instance().blacklist, request))
 	@staticmethod
 	def put(request: ForwardRequest):
@@ -80,14 +78,10 @@ class ForwardThread(Thread):
 	def get_status() -> bool:
 		return ForwardThread.switch
 	def run(self):
-		while not self.client.is_connected: time.sleep(1)
 		while self.get_status():
 			request = self.get()
 			try:
 				r = request.msg.forward(request.target_id, True)
-				#r = self.client.forward_messages(target_id, chat_id, msg_id, True)
-				#if msg_raw is None:
-				#	msg_raw = self._BuildInMessage(chat_id, msg_id)
 				self.checker.insert_log(r.chat.id, r.message_id, request.msg.chat.id,
 					request.msg.message_id, get_msg_from(request.msg), get_forward_id(request.msg, -1))
 				if request.log.need_log:
@@ -175,53 +169,45 @@ class get_history_process(Thread):
 		logger.info('Query %d completed%s, total %d photos, %d videos, %d documents.', self.target_id, ' (Dirty run)' if self.dirty_run else '', len(photos), len(videos), len(docs))
 		del photos, videos, docs
 
-
-def build_log(chat_id: int, message_id: int, from_user_id: int, froward_from_id: int):
-	return {'chat': {'id': chat_id}, 'message_id': message_id, 'from_user':{'id': from_user_id},
-		'forward_from_chat': {'id': froward_from_id}}
-
 class UnsupportType(Exception): pass
 
-class bot_controler:
+class BotControler:
 	def __init__(self):
 		config = ConfigParser()
 		config.read('config.ini')
 		self.configure = configure.init_instance(config)
-		self.redis = redis.Redis()
 		self.app = Client(
 			'inforward',
 			config.get('account', 'api_id'),
 			config.get('account', 'api_hash')
 		)
-		self.redis_prefix = ''.join(random.choices(string.ascii_lowercase, k=5))
 		self.checker = checkfile.init_instance(config.get('mysql', 'host'), config.get('mysql', 'username'), config.get('mysql', 'passwd'), config.get('mysql', 'database'))
+
+		self.redis = redis.Redis()
+		self.redis_prefix = ''.join(random.choices(string.ascii_lowercase, k=5))
 		self.redis.sadd(f'{self.redis_prefix}for_bypass', *self.checker.query_all_bypass())
 		self.redis.sadd(f'{self.redis_prefix}for_blacklist', *self.checker.query_all_blacklist())
-		#self.bypass_list = [int(x) for x in eval(self.config['forward']['bypass_list'])]
-		#self.black_list = [int(x) for x in eval(self.config['forward']['black_list'])]
 		self.redis.mset(self.checker.query_all_special_forward())
-		#self.do_spec_forward = eval(config['forward']['special'])
-		self.echo_switch = False
-		self.detail_msg_switch = False
-		#black_list_listen_mode = False # Deprecated
-		self.delete_blocked_message_after_blacklist = False
-		#self.authorized_users = eval(self.config['account']['auth_users'])
 		self.redis.sadd(f'{self.redis_prefix}for_admin', *self.checker.query_all_admin())
 		self.redis.sadd(f'{self.redis_prefix}for_admin', config.getint('account', 'owner'))
+
+		self.ForwardThread = ForwardThread()
+
+		self.min_resolution = config.getint('forward', 'lowq_resolution', fallback=120)
+		self.owner_group_id = config.getint('account', 'group_id', fallback=-1)
+
+		self.echo_switch = False
+		self.detail_msg_switch = False
+		#self.delete_blocked_message_after_blacklist = False
 		self.func_blacklist = None
 		if self.configure.blacklist:
 			self.func_blacklist = ForwardThread.put_blacklist
-		self.min_resolution = config.getint('forward', 'lowq_resolution', fallback=120)
-		#self.min_resolution = eval(self.config['forward']['lowq_resolution']) if self.config.has_option('forward', 'lowq_resolution') else 120
 		self.custom_switch = False
-		self.ForwardThread = ForwardThread(self.app)
-		self.owner_group_id = config.getint('account', 'group_id', fallback=-1)
 		self.init_handle()
 
 	def init_handle(self):
 		self.app.add_handler(MessageHandler(self.get_msg_from_owner_group,			Filters.chat(self.owner_group_id) & Filters.reply))
 		self.app.add_handler(MessageHandler(self.get_command_from_target,			Filters.chat(self.configure.predefined_group_list) & Filters.text & Filters.reply))
-		#self.app.add_handler(MessageHandler(self.do_nothing, 						Filters.chat(self.configure.predefined_group_list)))
 		self.app.add_handler(MessageHandler(self.pre_check, 						Filters.media & ~Filters.private & ~Filters.sticker & ~Filters.voice & ~Filters.web_page))
 		self.app.add_handler(MessageHandler(self.handle_photo,						Filters.photo & ~Filters.private & ~Filters.chat([self.configure.photo, self.configure.lowq])))
 		self.app.add_handler(MessageHandler(self.handle_video,						Filters.video & ~Filters.private & ~Filters.chat(self.configure.video)))
@@ -229,9 +215,9 @@ class bot_controler:
 		self.app.add_handler(MessageHandler(self.handle_document,					Filters.document & ~Filters.private & ~Filters.chat(self.configure.doc)))
 		self.app.add_handler(MessageHandler(self.handle_other,						Filters.media & ~Filters.private & ~Filters.sticker & ~Filters.voice & ~Filters.web_page))
 		self.app.add_handler(MessageHandler(self.pre_private,						Filters.private))
-		self.app.add_handler(MessageHandler(self.add_Except,						Filters.command('e') & Filters.private))
+		self.app.add_handler(MessageHandler(self.handle_add_bypass,					Filters.command('e') & Filters.private))
 		self.app.add_handler(MessageHandler(self.process_query,						Filters.command('q') & Filters.private))
-		self.app.add_handler(MessageHandler(self.add_BlackList,						Filters.command('b') & Filters.private))
+		self.app.add_handler(MessageHandler(self.handle_add_black_list,				Filters.command('b') & Filters.private))
 		self.app.add_handler(MessageHandler(self.process_show_detail,				Filters.command('s') & Filters.private))
 		self.app.add_handler(MessageHandler(self.set_forward_target_reply,			Filters.command('f') & Filters.reply & Filters.private))
 		self.app.add_handler(MessageHandler(self.set_forward_target,				Filters.command('f') & Filters.private))
@@ -266,7 +252,11 @@ class bot_controler:
 			if msg.reply_to_message.text: print(msg.reply_to_message.text)
 			logger.exception('Catch!')
 
-	def add_black_list(self, user_id: int, post_back_id=None):
+	def add_black_list(self, user_id: int or dict, post_back_id=None):
+		if isinstance(user_id, dict):
+			self.app.send_message(self.owner_group_id, 'User id:`{}`\nFrom chat id:`{}`\nForward from id:`{}`'.format(
+				user_id['from_user'], user_id['from_chat'], user_id['from_forward']), 'markdown')
+			user_id = user_id['from_user']
 		# Check is msg from authorized user
 		if user_id is None or self.redis.sismember(f'{self.redis_prefix}for_admin', user_id):
 			raise KeyError
@@ -314,11 +304,12 @@ class bot_controler:
 		if re.match(r'^\/(del(f)?|b|undo|print)$', msg.text):
 			if msg.text == '/b':
 				#client.delete_messages(msg.chat.id, msg.message_id)
-				for_id = get_forward_id(msg.reply_to_message)
+				#for_id = get_forward_id(msg.reply_to_message)
+				for_id = self.checker.query_forward_from(msg.chat.id, msg.reply_to_message.message_id)
 				#for_id = get_forward_id(msg['reply_to_message'])
-				self.add_black_list(for_id, (client, self.owner_group_id))
+				self.add_black_list(for_id, self.owner_group_id)
 				# To enable delete message, please add `delete other messages' privilege to bot
-				call_delete_msg(30, client.delete_messages, msg.chat.id, (msg['message_id'], msg['reply_to_message']['message_id']))
+				call_delete_msg(30, client.delete_messages, msg.chat.id, (msg.message_id, msg.reply_to_message.message_id))
 			elif msg.text == '/undo':
 				group_id = msg.reply_to_message.message_id if msg.reply_to_message else None
 				if group_id:
@@ -343,7 +334,7 @@ class bot_controler:
 
 	@staticmethod
 	def get_file_type(msg: Message) -> str:
-		s = bot_controler._get_file_type(msg)
+		s = BotControler._get_file_type(msg)
 		if s == 'error':
 			raise UnsupportType()
 		return s
@@ -357,8 +348,7 @@ class bot_controler:
 			'voice' if msg.voice else \
 			'document' if msg.document else \
 			'audio' if msg.audio else \
-			'contact' if msg.contact else \
-			'text' if msg.text else 'error'
+			'contact' if msg.contact else 'error'
 
 	def pre_check(self, _client: Client, msg: Message):
 		try:
@@ -398,7 +388,7 @@ class bot_controler:
 		self.ForwardThread.put(ForwardRequest(forward_target, msg, LogStruct(True, 'forward %s from %s (id: %d)', what, msg.chat.title, msg.chat.id)))
 
 	def handle_photo(self, _client: Client, msg: Message):
-		self.forward_msg(msg, self.configure.photo if self.checker.check_photo(msg.photo.thumbs[-1]) else self.configure.lowq)
+		self.forward_msg(msg, self.configure.photo if self.checker.check_photo(msg.photo) else self.configure.lowq)
 
 	def handle_video(self, _client: Client, msg: Message):
 		self.forward_msg(msg, self.configure.video, 'video')
@@ -421,14 +411,11 @@ class bot_controler:
 		client.send(api.functions.messages.ReadHistory(peer=client.resolve_peer(msg.chat.id), max_id=msg.message_id))
 		raise ContinuePropagation
 
-	def add_Except(self, _client: Client, msg: Message):
+	def handle_add_bypass(self, _client: Client, msg: Message):
 		if len(msg.text) < 4:
 			return
-		#bypass_list.append(int(msg.text[3:]))
 		if self.redis.sadd(f'{self.redis_prefix}for_bypass', msg.text[3:]):
-			pass
-		#bypass_list = list(set(bypass_list))
-		#self.config['forward']['bypass_list'] = repr(bypass_list)
+			self.checker.insert_bypass(msg.text[3:])
 		msg.reply('Add `{}` to bypass list'.format(msg.text[3:]), parse_mode='markdown')
 		logger.info('add except id: %s', msg.text[3:])
 
@@ -438,7 +425,7 @@ class bot_controler:
 			return
 		get_history_process(client, msg.chat.id, r.group(1), dirty_run=r.group(2) is not None)
 
-	def add_BlackList(self, client: Client, msg: Message):
+	def handle_add_black_list(self, client: Client, msg: Message):
 		try: self.add_black_list(msg.text[3:])
 		except:
 			client.send_message(msg.chat.id, "Check your input")
@@ -509,7 +496,6 @@ class bot_controler:
 		/s                      Toggle echo switch
 		/f <chat_id> <target>   Add `chat_id' to specified forward rules
 		/pw <new_password>      Change password to new password
-		/stop                   Stop bot
 		""", parse_mode='text')
 
 	def process_private(self, _client: Client, msg: Message):
@@ -530,11 +516,16 @@ class bot_controler:
 		self.ForwardThread.start()
 
 	def idle(self):
-		self.app.idle()
+		try:
+			self.app.idle()
+		except InterruptedError:
+			pass
 
 	def stop(self):
-		self.app.stop()
 		ForwardThread.switch = False
+		if not ForwardThread.queue.empty():
+			time.sleep(0.5)
+		self.app.stop()
 		checkfile.close_instance()
 
 
@@ -544,14 +535,13 @@ def call_delete_msg(interval: int, func, target_id: int, msg_: Message):
 	_t.start()
 
 def main():
-	bot = bot_controler()
+	bot = BotControler()
 	bot.start()
-	try:
-		bot.idle()
-	except InterruptedError:
-		pass
+	bot.idle()
 	bot.stop()
 
 
 if __name__ == '__main__':
+	logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(name)s - %(funcName)s - %(lineno)d - %(message)s')
+	logging.getLogger('pyrogram').setLevel(logging.WARNING)
 	main()
