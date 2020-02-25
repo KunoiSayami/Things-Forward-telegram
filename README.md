@@ -42,7 +42,7 @@ The following libraries are required:
 * Copy `config.ini.default` to `config.ini`
 * Edit forward target
 * Set up MySQL database and tables
-* Run `main.py`
+* Run `forward.py`
 
 ## License
 
