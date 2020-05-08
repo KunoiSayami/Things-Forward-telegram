@@ -17,34 +17,47 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
-import re, time
-from queue import Queue
-from configparser import ConfigParser
-from threading import Thread, Timer
+import importlib
 import logging
-import random, string
-from pymysql.err import ProgrammingError
-import redis
-from pyrogram import Client, Filters, api, Message, MessageHandler, \
-	ContinuePropagation
+import os
+import random
+import re
+import string
+import time
+from configparser import ConfigParser
+from dataclasses import dataclass
+from queue import Queue
+from threading import Thread, Timer
+from typing import Callable, Dict, List, NoReturn, Optional, Tuple, Union
+
 import pyrogram.errors
-from utils import get_forward_id, get_msg_from, is_bot, LogStruct, ForwardRequest, \
-	BlackListForwardRequest
-from fileid_checker import checkfile
+import redis
+from pymysql.err import ProgrammingError
+from pyrogram import (Client, ContinuePropagation, Filters, Message,
+                      MessageHandler, api)
+
 from configure import configure
+from fileid_checker import checkfile
+from utils import (BlackListForwardRequest, ForwardRequest, LogStruct,
+                   PluginLoader, get_forward_id, get_msg_from, is_bot)
 
 logger = logging.getLogger('forward_main')
+logger.setLevel(logging.DEBUG)
+
 
 class ForwardThread(Thread):
-	class _IDObject(object):
-		def __init__(self, _id: int):
-			self.id = _id
-	class _BuildInMessage(object):
-		def __init__(self, chat_id: int, msg_id: int, from_user_id: int = -1, forward_from_id = -1):
-			self.chat = ForwardThread._IDObject(chat_id)
-			self.message_id = msg_id
-			self.from_user = ForwardThread._IDObject(from_user_id)
-			self.forward_from = ForwardThread._IDObject(forward_from_id)
+
+	@dataclass
+	class _IDObject:
+		id: int
+
+	class _BuildInMessage:
+		def __init__(self, chat_id: int, msg_id: int, from_user_id: int=-1, forward_from_id: int=-1):
+			self.chat: int = ForwardThread._IDObject(chat_id)
+			self.message_id: int = msg_id
+			self.from_user: int = ForwardThread._IDObject(from_user_id)
+			self.forward_from: int = ForwardThread._IDObject(forward_from_id)
+
 	queue = Queue()
 	switch = True
 	'''
@@ -57,27 +70,32 @@ class ForwardThread(Thread):
 	'''
 	def __init__(self):
 		super().__init__(daemon=True)
-		self.checker = checkfile.get_instance()
-		self.configure = configure.get_instance()
-		self.logger = logging.getLogger('fwd_thread')
-		log_file_header = logging.FileHandler('log.log')
+		self.checker: checkfile = checkfile.get_instance()
+		self.configure: configure = configure.get_instance()
+		self.logger: logging.Logger = logging.getLogger('fwd_thread')
+		log_file_header: logging.FileHandler = logging.FileHandler('log.log')
 		log_file_header.setFormatter(logging.Formatter('[%(asctime)s][%(levelname)s] %(message)s'))
 		self.logger.setLevel(logging.INFO)
 		self.logger.addHandler(log_file_header)
 		self.logger.propagate = False
+
 	@staticmethod
-	def put_blacklist(request: BlackListForwardRequest):
+	def put_blacklist(request: BlackListForwardRequest) -> NoReturn:
 		ForwardThread.put(ForwardRequest.from_super(configure.get_instance().blacklist, request))
+
 	@staticmethod
-	def put(request: ForwardRequest):
+	def put(request: ForwardRequest) -> NoReturn:
 		ForwardThread.queue.put_nowait(request)
+
 	@staticmethod
 	def get() -> ForwardRequest:
 		return ForwardThread.queue.get()
+
 	@staticmethod
 	def get_status() -> bool:
 		return ForwardThread.switch
-	def run(self):
+
+	def run(self) -> NoReturn:
 		while self.get_status():
 			request = self.get()
 			try:
@@ -97,34 +115,40 @@ class ForwardThread(Thread):
 				logger.exception('Got other exceptions in forward thread')
 			time.sleep(0.5)
 
+
 class set_status_thread(Thread):
 	def __init__(self, client: Client, chat_id: int):
 		Thread.__init__(self, daemon=True)
-		self.switch = True
-		self.client = client
-		self.chat_id = chat_id
+		self.switch: bool = True
+		self.client: Client = client
+		self.chat_id: int = chat_id
 		self.start()
-	def setOff(self):
+
+	def setOff(self) -> NoReturn:
 		self.switch = False
-	def run(self):
+
+	def run(self) -> NoReturn:
 		while self.switch:
 			self.client.send_chat_action(self.chat_id, 'TYPING')
 			# After 5 seconds, chat action will canceled automatically
 			time.sleep(4.5)
 		self.client.send_chat_action(self.chat_id, 'CANCEL')
 
+
 class get_history_process(Thread):
-	def __init__(self, client: Client, chat_id: int, target_id:  int or str, offset_id: int = 0, dirty_run: bool = False):
+
+	def __init__(self, client: Client, chat_id: int, target_id:  Union[int, str], offset_id: int=0, dirty_run: bool=False):
 		Thread.__init__(self, True)
-		self.checker = checkfile.get_instance()
-		self.configure = configure.get_instance()
-		self.client = client
-		self.target_id = int(target_id)
-		self.offset_id = offset_id
-		self.chat_id = chat_id
-		self.dirty_run = dirty_run
+		self.checker: checkfile = checkfile.get_instance()
+		self.configure: configure = configure.get_instance()
+		self.client: Client = client
+		self.target_id: int = int(target_id)
+		self.offset_id: int = offset_id
+		self.chat_id: int = chat_id
+		self.dirty_run: bool = dirty_run
 		self.start()
-	def run(self):
+
+	def run(self) -> NoReturn:
 		checkfunc = self.checker.checkFile if not self.dirty_run else self.checker.checkFile_dirty
 		photos, videos, docs = [], [], []
 		msg_group = self.client.get_history(self.target_id, offset_id=self.offset_id)
@@ -181,31 +205,35 @@ class BotControler:
 			config.get('account', 'api_id'),
 			config.get('account', 'api_hash')
 		)
-		self.checker = checkfile.init_instance(config.get('mysql', 'host'), config.get('mysql', 'username'), config.get('mysql', 'passwd'), config.get('mysql', 'database'))
+		self.checker: checkfile = checkfile.init_instance(config.get('mysql', 'host'), config.get('mysql', 'username'), config.get('mysql', 'passwd'), config.get('mysql', 'database'))
 
-		self.redis = redis.Redis()
-		self.redis_prefix = ''.join(random.choices(string.ascii_lowercase, k=5))
+		self.redis: redis.Redis = redis.Redis()
+		self.redis_prefix: str = ''.join(random.choices(string.ascii_lowercase, k=5))
 		self.redis.sadd(f'{self.redis_prefix}for_bypass', *self.checker.query_all_bypass())
 		self.redis.sadd(f'{self.redis_prefix}for_blacklist', *self.checker.query_all_blacklist())
 		self.redis.mset(self.checker.query_all_special_forward())
 		self.redis.sadd(f'{self.redis_prefix}for_admin', *self.checker.query_all_admin())
 		self.redis.sadd(f'{self.redis_prefix}for_admin', config.getint('account', 'owner'))
 
-		self.ForwardThread = ForwardThread()
+		self.ForwardThread: ForwardThread = ForwardThread()
 
-		self.min_resolution = config.getint('forward', 'lowq_resolution', fallback=120)
-		self.owner_group_id = config.getint('account', 'group_id', fallback=-1)
+		self.min_resolution: int = config.getint('forward', 'lowq_resolution', fallback=120)
+		self.owner_group_id: int = config.getint('account', 'group_id', fallback=-1)
 
-		self.echo_switch = False
-		self.detail_msg_switch = False
-		#self.delete_blocked_message_after_blacklist = False
-		self.func_blacklist = None
+		self.echo_switch: bool = False
+		self.detail_msg_switch: bool = False
+		#self.delete_blocked_message_after_blacklist: bool = False
+		self.func_blacklist: Callable[[], int] = None
 		if self.configure.blacklist:
 			self.func_blacklist = ForwardThread.put_blacklist
-		self.custom_switch = False
+		self.custom_switch: bool = False
+
 		self.init_handle()
 
-	def init_handle(self):
+		self.plugins: List[PluginLoader] = []
+		self.load_plugins(config)
+
+	def init_handle(self) -> NoReturn:
 		self.app.add_handler(MessageHandler(self.get_msg_from_owner_group,			Filters.chat(self.owner_group_id) & Filters.reply))
 		self.app.add_handler(MessageHandler(self.get_command_from_target,			Filters.chat(self.configure.predefined_group_list) & Filters.text & Filters.reply))
 		self.app.add_handler(MessageHandler(self.pre_check, 						Filters.media & ~Filters.private & ~Filters.sticker & ~Filters.voice & ~Filters.web_page))
@@ -230,10 +258,52 @@ class BotControler:
 		self.app.add_handler(MessageHandler(self.show_help_message,					Filters.command('help') & Filters.private))
 		self.app.add_handler(MessageHandler(self.process_private,					Filters.private))
 
+	def load_plugins(self, config: ConfigParser):
+		try:
+			for root, _dirs, filenames in os.walk('.'):
+				if root != '.':
+					continue
+				for filename in filenames:
+					if not (filename.startswith('Plugin') and filename.endswith('.py')):
+						continue
+					try:
+						module_name = filename.split('.py')[0]
+						mod = importlib.import_module(module_name)
+						loader = PluginLoader(mod, module_name, self.app, config, checkfile).create_instace()
+						loader.instance.plugin_pending_start()
+						self.plugins.append(loader)
+					except:
+						logger.exception('Loading plugin: %s catch exception!', module_name)
+					else:
+						logger.info('Load plugin: %s successfully', module_name)
+		except FileNotFoundError:
+			pass
+
+	def start_plugins(self):
+		for x in self.plugins:
+			try:
+				x.instance.plugin_start()
+			except:
+				logger.error('Start %s plugin fail', x.module_name)
+
+	def stop_plugins(self):
+		for x in self.plugins:
+			try:
+				x.instance.plugin_stop()
+			except:
+				logger.error('Stop %s plugin fail', x.module_name)
+
+	def pending_stop_plugins(self):
+		for x in self.plugins:
+			try:
+				x.instance.plugin_pending_stop()
+			except:
+				logger.error('Pending stop %s plugin fail', x.module_name)
+
 	def user_checker(self, msg: Message) -> bool:
 		return self.redis.sismember(f'{self.redis_prefix}for_admin', msg.chat.id)
 
-	def reply_checker_and_del_from_blacklist(self, client: Client, msg: Message):
+	def reply_checker_and_del_from_blacklist(self, client: Client, msg: Message) -> NoReturn:
 		try:
 			pending_del = None
 			if msg.reply_to_message.text:
@@ -252,7 +322,7 @@ class BotControler:
 			if msg.reply_to_message.text: print(msg.reply_to_message.text)
 			logger.exception('Catch!')
 
-	def add_black_list(self, user_id: int or dict, post_back_id=None):
+	def add_black_list(self, user_id: Union[int, dict], post_back_id=None) -> NoReturn:
 		if isinstance(user_id, dict):
 			self.app.send_message(self.owner_group_id, 'User id:`{}`\nFrom chat id:`{}`\nForward from id:`{}`'.format(
 				user_id['from_user'], user_id['from_chat'], user_id['from_forward']), 'markdown')
@@ -267,7 +337,7 @@ class BotControler:
 			self.app.send_message(post_back_id, 'Add `{}` to blacklist'.format(user_id),
 				parse_mode='markdown')
 
-	def del_message_by_id(self, client: Client, msg: Message, send_message_to : int or str = None, forward_control: bool = True):
+	def del_message_by_id(self, client: Client, msg: Message, send_message_to: Optional[Union[int, str]]=None, forward_control: bool=True) -> NoReturn:
 		if forward_control and self.configure.blacklist == '':
 			logger.error('Request forward but blacklist channel not specified')
 			return
@@ -275,7 +345,7 @@ class BotControler:
 		q = self.checker.query("SELECT * FROM `msg_detail` WHERE (`from_chat` = %s OR `from_user` = %s OR `from_forward` = %s) AND `to_chat` != %s",
 			(id_from_reply, id_from_reply, id_from_reply, self.configure.blacklist))
 		if send_message_to:
-			_msg = client.send_message(send_message_to, 'Find {} message(s)'.format(len(q)))
+			_msg = client.send_message(send_message_to, f'Find {len(q)} message(s)')
 		if forward_control:
 			if send_message_to:
 				typing = set_status_thread(client, send_message_to)
@@ -292,7 +362,7 @@ class BotControler:
 		if send_message_to:
 			_msg.edit(f'Delete all message from `{id_from_reply}` completed.', 'markdown')
 
-	def get_msg_from_owner_group(self, client: Client, msg: Message):
+	def get_msg_from_owner_group(self, client: Client, msg: Message) -> NoReturn:
 		try:
 			if msg.text and msg.text == '/undo':
 				self.reply_checker_and_del_from_blacklist(client, msg)
@@ -300,7 +370,7 @@ class BotControler:
 			# TODO: detail exception
 			logger.exception('')
 
-	def get_command_from_target(self, client: Client, msg: Message):
+	def get_command_from_target(self, client: Client, msg: Message) -> NoReturn:
 		if re.match(r'^\/(del(f)?|b|undo|print)$', msg.text):
 			if msg.text == '/b':
 				#client.delete_messages(msg.chat.id, msg.message_id)
@@ -350,7 +420,7 @@ class BotControler:
 			'audio' if msg.audio else \
 			'contact' if msg.contact else 'error'
 
-	def pre_check(self, _client: Client, msg: Message):
+	def pre_check(self, _client: Client, msg: Message) -> NoReturn:
 		try:
 			if self.redis.sismember(f'{self.redis_prefix}for_bypass', msg.chat.id) or not self.checker.checkFile(self.get_file_id(msg, self.get_file_type(msg))):
 				return
@@ -359,7 +429,7 @@ class BotControler:
 		else:
 			raise ContinuePropagation
 
-	def blacklist_checker(self, msg: Message):
+	def blacklist_checker(self, msg: Message) -> NoReturn:
 		return self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.chat.id) or \
 				(msg.from_user and self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.from_user.id)) or \
 				(msg.forward_from and self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.forward_from.id)) or \
@@ -369,7 +439,7 @@ class BotControler:
 	def do_nothing(*args):
 		pass
 
-	def forward_msg(self, msg: Message, to: int, what: str = 'photo'):
+	def forward_msg(self, msg: Message, to: int, what: str='photo') -> NoReturn:
 		if self.blacklist_checker(msg):
 			if msg.from_user and msg.from_user.id == 630175608: return
 			self.func_blacklist(BlackListForwardRequest(msg, LogStruct(True, 'forward blacklist context %s from %s (id: %d)', what, msg.chat.title, msg.chat.id)))
@@ -387,13 +457,13 @@ class BotControler:
 			forward_target = self.configure.bot
 		self.ForwardThread.put(ForwardRequest(forward_target, msg, LogStruct(True, 'forward %s from %s (id: %d)', what, msg.chat.title, msg.chat.id)))
 
-	def handle_photo(self, _client: Client, msg: Message):
+	def handle_photo(self, _client: Client, msg: Message) -> NoReturn:
 		self.forward_msg(msg, self.configure.photo if self.checker.check_photo(msg.photo) else self.configure.lowq)
 
-	def handle_video(self, _client: Client, msg: Message):
+	def handle_video(self, _client: Client, msg: Message) -> NoReturn:
 		self.forward_msg(msg, self.configure.video, 'video')
 
-	def handle_gif(self, _client: Client, msg: Message):
+	def handle_gif(self, _client: Client, msg: Message) -> NoReturn:
 		self.forward_msg(msg, self.configure.gif, 'gif')
 
 	def handle_document(self, _client: Client, msg: Message):
@@ -401,17 +471,17 @@ class BotControler:
 		forward_target = self.configure.doc if '/' in msg.document.mime_type and msg.document.mime_type.split('/')[0] in ('image', 'video') else self.configure.other
 		self.forward_msg(msg, forward_target, 'doc' if forward_target != self.configure.other else 'other')
 
-	def handle_other(self, _client: Client, msg: Message):
+	def handle_other(self, _client: Client, msg: Message) -> NoReturn:
 		self.forward_msg(msg, self.configure.other, 'other')
 
-	def pre_private(self, client: Client, msg: Message):
+	def pre_private(self, client: Client, msg: Message) -> NoReturn:
 		if not self.user_checker(msg):
 			client.send(api.functions.messages.ReportSpam(peer=client.resolve_peer(msg.chat.id)))
 			return
 		client.send(api.functions.messages.ReadHistory(peer=client.resolve_peer(msg.chat.id), max_id=msg.message_id))
 		raise ContinuePropagation
 
-	def handle_add_bypass(self, _client: Client, msg: Message):
+	def handle_add_bypass(self, _client: Client, msg: Message) -> NoReturn:
 		if len(msg.text) < 4:
 			return
 		if self.redis.sadd(f'{self.redis_prefix}for_bypass', msg.text[3:]):
@@ -419,23 +489,23 @@ class BotControler:
 		msg.reply('Add `{}` to bypass list'.format(msg.text[3:]), parse_mode='markdown')
 		logger.info('add except id: %s', msg.text[3:])
 
-	def process_query(self, client: Client, msg: Message):
+	def process_query(self, client: Client, msg: Message) -> NoReturn:
 		r = re.match(r'^\/q (-?\d+)(d)?$', msg.text)
 		if r is None:
 			return
 		get_history_process(client, msg.chat.id, r.group(1), dirty_run=r.group(2) is not None)
 
-	def handle_add_black_list(self, client: Client, msg: Message):
+	def handle_add_black_list(self, client: Client, msg: Message) -> NoReturn:
 		try: self.add_black_list(msg.text[3:])
 		except:
 			client.send_message(msg.chat.id, "Check your input")
 			logger.exception('Catch!')
 
-	def process_show_detail(self, _client: Client, msg: Message):
+	def process_show_detail(self, _client: Client, msg: Message) -> NoReturn:
 		self.echo_switch = not self.echo_switch
 		msg.reply('Set echo to {}'.format(self.echo_switch))
 
-	def set_forward_target_reply(self, _client: Client, msg: Message):
+	def set_forward_target_reply(self, _client: Client, msg: Message) -> NoReturn:
 		if msg.reply_to_message.text is not None: return
 		r = re.match(r'^forward_from = (-\d+)$', msg.reply_to_message.text)
 		r1 = re.match(r'^\/f (other|photo|bot|video|anime|gif|doc|lowq)$', msg.text)
@@ -447,47 +517,47 @@ class BotControler:
 		#self._set_forward_target(r1.group)
 		#msg.reply('Set group `{}` forward to `{}`'.format(r.group(1), r1.group(1)), parse_mode='markdown')
 
-	def set_forward_target(self, _client: Client, msg: Message):
+	def set_forward_target(self, _client: Client, msg: Message) -> NoReturn:
 		r = re.match(r'^\/f (-?\d+) (other|photo|bot|video|anime|gif|doc|lowq)$', msg.text)
 		if r is None:
 			return
 		self._set_forward_target(r.group(1), r.group(2), msg)
 
-	def _set_forward_target(self, chat_id: int, target: str, msg: Message):
+	def _set_forward_target(self, chat_id: int, target: str, msg: Message) -> NoReturn:
 		#self.redis.set(f'{self.redis_prefix}{chat_id}', target)
 		self.redis.set(chat_id, target)
 		self.checker.update_forward_target(chat_id, target)
 		msg.reply(f'Set group `{chat_id}` forward to `{target}`', parse_mode='markdown')
 
-	def add_user(self, _client: Client, msg: Message):
+	def add_user(self, _client: Client, msg: Message) -> NoReturn:
 		r = re.match(r'^/a (.+)$', msg.text)
 		if r and r.group(1) == self.configure.authorized_code:
 			if self.redis.sadd(f'{self.redis_prefix}for_admin', msg.chat.id):
 				self.checker.insert_admin(msg.chat.id)
 			msg.reply('Success add to authorized users.')
 
-	def change_code(self, _client: Client, msg: Message):
+	def change_code(self, _client: Client, msg: Message) -> NoReturn:
 		r = re.match(r'^/pw (.+)$', msg.text)
 		if r:
 			msg.reply('Success changed authorize code.')
 
-	def undo_blacklist_operation(self, client: Client, msg: Message):
+	def undo_blacklist_operation(self, client: Client, msg: Message) -> NoReturn:
 		self.reply_checker_and_del_from_blacklist(client, msg)
 
-	def switch_detail2(self, _client: Client, msg: Message):
+	def switch_detail2(self, _client: Client, msg: Message) -> NoReturn:
 		self.custom_switch = not self.custom_switch
 		msg.reply(f'Switch custom print to {self.custom_switch}')
 
-	def switch_detail(self, _client: Client, msg: Message):
+	def switch_detail(self, _client: Client, msg: Message) -> NoReturn:
 		self.detail_msg_switch = not self.detail_msg_switch
 		msg.reply(f'Switch detail print to {self.detail_msg_switch}')
 
-	def callstopfunc(self, _client: Client, msg: Message):
+	def callstopfunc(self, _client: Client, msg: Message) -> NoReturn:
 		#msg.reply('Exiting...')
 		#Thread(target=process_exit.exit_process, args=(2,)).start()
 		pass
 
-	def show_help_message(self, _client: Client, msg: Message):
+	def show_help_message(self, _client: Client, msg: Message) -> NoReturn:
 		msg.reply(""" Usage:
 		/e <chat_id>            Add `chat_id' to bypass list
 		/a <password>           Use the `password' to obtain authorization
@@ -498,7 +568,7 @@ class BotControler:
 		/pw <new_password>      Change password to new password
 		""", parse_mode='text')
 
-	def process_private(self, _client: Client, msg: Message):
+	def process_private(self, _client: Client, msg: Message) -> NoReturn:
 		if self.custom_switch:
 			obj = getattr(msg, self.get_file_type(msg), None)
 			if obj:
@@ -511,30 +581,33 @@ class BotControler:
 		if r is None: return
 		self.add_black_list(r.group(1), msg.chat.id)
 
-	def start(self):
+	def start(self) -> NoReturn:
 		self.app.start()
 		self.ForwardThread.start()
+		self.start_plugins()
 
-	def idle(self):
+	def idle(self) -> NoReturn:
 		try:
 			self.app.idle()
 		except InterruptedError:
 			pass
 
-	def stop(self):
+	def stop(self) -> NoReturn:
 		ForwardThread.switch = False
+		self.pending_stop_plugins()
 		if not ForwardThread.queue.empty():
 			time.sleep(0.5)
 		self.app.stop()
 		checkfile.close_instance()
+		self.stop_plugins()
 
 
-def call_delete_msg(interval: int, func, target_id: int, msg_: Message):
+def call_delete_msg(interval: int, func, target_id: int, msg_: Message) -> NoReturn:
 	_t = Timer(interval, func, (target_id, msg_))
 	_t.daemon = True
 	_t.start()
 
-def main():
+def main() -> NoReturn:
 	bot = BotControler()
 	bot.start()
 	bot.idle()

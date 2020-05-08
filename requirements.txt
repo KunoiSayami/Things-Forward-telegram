@@ -1,4 +1,4 @@
-pyrogram==0.16.0
+pyrogram==0.17.0
 pymysql
 redis
 tgcrypto

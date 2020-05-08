@@ -12,7 +12,7 @@ If you want to upate to the latest version, please update the configuration file
 
 ## Operating Environment
 
-Python 3.4 and above is required
+Python 3.7 and above is required
 
 The following libraries are required:
 

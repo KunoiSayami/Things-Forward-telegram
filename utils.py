@@ -17,7 +17,15 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
-from pyrogram import Message
+from dataclasses import dataclass
+from typing import Dict, List, NoReturn, T
+
+from pyrogram import Message, Client
+
+from configure import ConfigParser
+from fileid_checker import checkfile
+
+
 def get_msg_key(msg: Message, key1: str, key2: str, fallback: object=None) -> object:
 	try:
 		return msg[key1][key2]
@@ -56,3 +64,50 @@ class ForwardRequest(BlackListForwardRequest):
 	@staticmethod
 	def from_super(target_id: int, request: BlackListForwardRequest):
 		return ForwardRequest(target_id, request.msg, request.log)
+
+class Plugin:
+
+	def plugin_start(self) -> NoReturn:
+		pass
+
+	def plugin_pending_start(self) -> NoReturn:
+		pass
+
+	def plugin_pending_stop(self) -> NoReturn:
+		pass
+
+	def plugin_stop(self) -> NoReturn:
+		pass
+
+
+class _PluginModule:
+	requirement: Dict[str, bool]
+
+
+@dataclass
+class _Requirement:
+	config: bool
+	database: bool
+
+
+class PluginLoader:
+	
+	def __init__(self, module: _PluginModule, module_name: str, client: Client, config: ConfigParser, database: checkfile):
+		self.requirement: Dict[str, bool] = module.requirement
+		self.args: List[T] = [client]
+		_requirement = _Requirement(self.requirement.get('config'), self.requirement.get('database'))
+		if _requirement.config:
+			self.args.append(config)
+		if _requirement.database:
+			self.args.append(database)
+		self.module: T = module
+		self.module_name: str = module_name
+		self.instance: Plugin = None
+	
+	def __call__(self) -> Plugin:
+		self.create_instace()
+		return self.instance
+
+	def create_instace(self) -> 'PluginLoader':
+		self.instance = getattr(self.module, self.module_name)(*self.args)
+		return self

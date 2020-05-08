@@ -18,6 +18,8 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 from configparser import ConfigParser
+
+
 class _configure:
 	def __init__(self, config: ConfigParser):
 		self._to_photo = config.getint('forward', 'to_photo')
@@ -35,7 +37,7 @@ class _configure:
 		self._query_doc = config.getint('forward', 'query_doc', fallback=-1)
 
 		self._authorized_code = config.get('account', 'auth_code', fallback=None)
-	
+
 	@property
 	def photo(self) -> int:
 		return self._to_photo
@@ -100,11 +102,10 @@ class _configure:
 class configure(_configure):
 	_instance = None
 	@staticmethod
-	def get_instance() -> _configure:
+	def get_instance() -> 'configure':
 		return configure._instance
 
 	@staticmethod
-	def init_instance(config: ConfigParser) -> _configure:
-		configure._instance = _configure(config)
+	def init_instance(config: ConfigParser) -> 'configure':
+		configure._instance = configure(config)
 		return configure._instance
-

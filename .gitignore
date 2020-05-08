@@ -109,3 +109,5 @@ venv.bak/
 
 # runtime files
 *.json
+
+plugin*.py

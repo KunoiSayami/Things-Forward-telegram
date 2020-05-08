@@ -18,10 +18,14 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 from threading import Lock
-from pyrogram import Photo
-from libpy3.mysqldb import mysqldb
+from typing import List, NoReturn, Tuple
 
-class _checkfile(mysqldb):
+from pyrogram import Photo
+
+from libpy3.mysqldb import MySqlDB
+
+
+class _checkfile(MySqlDB):
 	min_resolution = 120
 	def __init__(self, host: str, username: str, password: str, database: str):
 		self.lock = Lock()
@@ -45,7 +49,7 @@ class _checkfile(mysqldb):
 	def checkFile_dirty(self, file_id: str) -> bool:
 		return self.query1("SELECT `id` FROM `file_id` WHERE `id` = %s", file_id) is None
 
-	def insert_log(self, *args):
+	def insert_log(self, *args: Tuple[str, ...]) -> NoReturn:
 		self.execute("INSERT INTO `msg_detail` (`to_chat`, `to_msg`, `from_chat`, `from_id`, `from_user`, `from_forward`) \
 			VALUES (%s, %s, %s, %s, %s, %s)", args)
 
