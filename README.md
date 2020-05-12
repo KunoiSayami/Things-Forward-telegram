@@ -16,9 +16,9 @@ Python 3.7 and above is required
 
 The following libraries are required:
 
-- pyrogram == 0.16.0
-- pymysql
-- redis
+- pyrogram === 0.17.0-async
+- aiomysql
+- aioredis
 
 ## Feature
 
