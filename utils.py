@@ -18,7 +18,8 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 from dataclasses import dataclass
-from typing import Dict, List, NoReturn, T
+from typing import Dict, List, NoReturn, T, Callable
+import traceback
 
 from pyrogram import Message, Client
 
@@ -26,13 +27,13 @@ from configure import ConfigParser
 from fileid_checker import checkfile
 
 
-def get_msg_key(msg: Message, key1: str, key2: str, fallback: object=None) -> object:
+def get_msg_key(msg: Message, key1: str, key2: str, fallback: T=None) -> T:
 	try:
 		return msg[key1][key2]
 	except:
 		return fallback
 
-def get_forward_id(msg: Message, fallback: object=None) -> int:
+def get_forward_id(msg: Message, fallback: T=None) -> int:
 	if msg.forward_from_chat: return msg.forward_from_chat.id
 	if msg.forward_from: return msg.forward_from.id
 	return fallback
@@ -58,25 +59,32 @@ class BlackListForwardRequest:
 		self.log = log
 
 class ForwardRequest(BlackListForwardRequest):
+
 	def __init__(self, target_id: int, msg: Message, log: LogStruct = LogStruct(False, '')):
 		super().__init__(msg, log)
 		self.target_id = target_id
-	@staticmethod
-	def from_super(target_id: int, request: BlackListForwardRequest):
-		return ForwardRequest(target_id, request.msg, request.log)
+
+	@classmethod
+	def from_super(cls, target_id: int, request: BlackListForwardRequest):
+		return cls(target_id, request.msg, request.log)
 
 class Plugin:
 
-	def plugin_start(self) -> NoReturn:
+	@classmethod
+	async def create_plugin(cls, *_args) -> 'Plugin':
+		self = cls()
+		return self
+
+	async def plugin_start(self) -> NoReturn:
 		pass
 
-	def plugin_pending_start(self) -> NoReturn:
+	async def plugin_pending_start(self) -> NoReturn:
 		pass
 
-	def plugin_pending_stop(self) -> NoReturn:
+	async def plugin_pending_stop(self) -> NoReturn:
 		pass
 
-	def plugin_stop(self) -> NoReturn:
+	async def plugin_stop(self) -> NoReturn:
 		pass
 
 
@@ -104,10 +112,20 @@ class PluginLoader:
 		self.module_name: str = module_name
 		self.instance: Plugin = None
 	
-	def __call__(self) -> Plugin:
-		self.create_instace()
+	async def __call__(self) -> Plugin:
+		await self.create_instace()
 		return self.instance
 
-	def create_instace(self) -> 'PluginLoader':
-		self.instance = getattr(self.module, self.module_name)(*self.args)
+	async def create_instace(self) -> 'PluginLoader':
+		self.instance = await getattr(self.module, self.module_name).create_plugin(*self.args)
 		return self
+
+@dataclass
+class TracebackableCallable:
+	callback: Callable[[], ...]
+
+	async def __call__(self) -> NoReturn:
+		try:
+			await self.callback()
+		except:
+			traceback.print_exc()
