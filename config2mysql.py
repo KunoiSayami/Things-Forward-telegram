@@ -17,23 +17,31 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
+import asyncio
 from configparser import ConfigParser
+
 from fileid_checker import checkfile
-config = ConfigParser()
-config.read('config.ini')
-conn = checkfile.init_instance(config.get('mysql', 'host'), config.get('mysql', 'username'), config.get('mysql', 'passwd'), config.get('mysql', 'database'))
-if input('Clear database before import? [y/N]: ').lower() == 'y':
-	conn.execute('DELETE FROM `user_list`')
-	conn.execute('DELETE FROM `blacklist`')
-	conn.execute('DELETE FROM `special_forward`')
-	conn.commit()
-	print('Clear!')
-for x in map(int, config.get('forward', 'bypass_list')[1:-1].split(',')):
-	conn.insert_bypass(x)
-conn.insert_blacklist(list(map(int, config.get('forward', 'black_list')[1:-1].split(','))))
-#for x in {x[0]: re.findall(r'\'([^\']+)\'', x[1])[0] for x in map(lambda x: x.strip().split(':'), config.get('forward', 'special')[1:-1].split(','))}.items():
-for x in {x[0]: x[1].strip()[1:-1] for x in map(lambda x: x.strip().split(':'), config.get('forward', 'special')[1:-1].split(','))}.items():
-	conn.update_forward_target(*x)
-for x in map(int, config.get('account', 'auth_users')[1:-1].split(',')):
-	conn.insert_admin(x)
-conn.close()
+
+
+async def main():
+	config = ConfigParser()
+	config.read('config.ini')
+	conn = checkfile.create(config.get('mysql', 'host'), config.get('mysql', 'username'), config.get('mysql', 'passwd'), config.get('mysql', 'database'))
+	if input('Clear database before import? [y/N]: ').lower() == 'y':
+		await conn.execute('DELETE FROM `user_list`')
+		await conn.execute('DELETE FROM `blacklist`')
+		await conn.execute('DELETE FROM `special_forward`')
+		#conn.commit()
+		print('Clear!')
+	for x in map(int, config.get('forward', 'bypass_list')[1:-1].split(',')):
+		await conn.insert_bypass(x)
+	await conn.insert_blacklist(list(map(int, config.get('forward', 'black_list')[1:-1].split(','))))
+	#for x in {x[0]: re.findall(r'\'([^\']+)\'', x[1])[0] for x in map(lambda x: x.strip().split(':'), config.get('forward', 'special')[1:-1].split(','))}.items():
+	for x in {x[0]: x[1].strip()[1:-1] for x in map(lambda x: x.strip().split(':'), config.get('forward', 'special')[1:-1].split(','))}.items():
+		await conn.update_forward_target(*x)
+	for x in map(int, config.get('account', 'auth_users')[1:-1].split(',')):
+		await conn.insert_admin(x)
+	await conn.close()
+
+if __name__ == "__main__":
+	asyncio.run(main())

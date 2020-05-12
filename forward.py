@@ -452,10 +452,6 @@ class BotControler:
 				(msg.forward_from and await self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.forward_from.id)) or \
 				(msg.forward_from_chat and await self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.forward_from_chat.id))
 
-	@staticmethod
-	def do_nothing(*args):
-		pass
-
 	async def forward_msg(self, msg: Message, to: int, what: str='photo') -> NoReturn:
 		if self.blacklist_checker(msg):
 			if msg.from_user and msg.from_user.id == 630175608: return
@@ -619,7 +615,7 @@ class BotControler:
 		await self.app.stop()
 		await self.checker.close()
 		await self.stop_plugins()
-
+		await self.clean()
 
 def call_delete_msg(interval: int, func: Callable[[Message], int, Union[int, Tuple[int, ...]]], target_id: int, msg_: Union[int, Tuple[int, ...]]) -> NoReturn:
 	asyncio.get_event_loop().call_later(interval, func, target_id, msg_)
