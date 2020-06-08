@@ -18,9 +18,10 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 from configparser import ConfigParser
+from typing import List, Optional
 
 
-class _configure:
+class configure:
 	def __init__(self, config: ConfigParser):
 		self._to_photo = config.getint('forward', 'to_photo')
 		self._to_video = config.getint('forward', 'to_video')
@@ -71,7 +72,7 @@ class _configure:
 		return self._bot_for
 
 	@property
-	def blacklist(self) -> int:
+	def blacklist(self) -> Optional[int]:
 		return self._to_blacklist
 
 	@property
@@ -91,21 +92,19 @@ class _configure:
 		return self._bot_for
 
 	@property
-	def authorized_code(self) -> str:
+	def authorized_code(self) -> Optional[str]:
 		return self._authorized_code
 
 	@property
-	def predefined_group_list(self) -> list:
+	def predefined_group_list(self) -> List[int]:
 		return [self.photo, self.video, self.other, self.anime, self.doc, self.gif, self.lowq, self.bot_for]
 
-
-class configure(_configure):
 	_instance = None
-	@staticmethod
-	def get_instance() -> 'configure':
-		return configure._instance
+	@classmethod
+	def get_instance(cls) -> 'configure':
+		return cls._instance # type: ignore
 
-	@staticmethod
-	def init_instance(config: ConfigParser) -> 'configure':
-		configure._instance = configure(config)
-		return configure._instance
+	@classmethod
+	def init_instance(cls, config: ConfigParser) -> 'configure':
+		cls._instance = cls(config)
+		return cls._instance

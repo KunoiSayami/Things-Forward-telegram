@@ -17,14 +17,16 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
-from dataclasses import dataclass
-from typing import Dict, List, NoReturn, T, Callable
 import traceback
+from dataclasses import dataclass
+from typing import Awaitable, Callable, Dict, List, TypeVar, Union
 
-from pyrogram import Message, Client
+from pyrogram import Client, Message
 
 from configure import ConfigParser
 from fileid_checker import checkfile
+
+T = TypeVar('T')
 
 
 def get_msg_key(msg: Message, key1: str, key2: str, fallback: T=None) -> T:
@@ -33,7 +35,7 @@ def get_msg_key(msg: Message, key1: str, key2: str, fallback: T=None) -> T:
 	except:
 		return fallback
 
-def get_forward_id(msg: Message, fallback: T=None) -> int:
+def get_forward_id(msg: Message, fallback: T=None) -> Union[T, int]:
 	if msg.forward_from_chat: return msg.forward_from_chat.id
 	if msg.forward_from: return msg.forward_from.id
 	return fallback
@@ -47,18 +49,24 @@ def is_bot(msg: Message) -> bool:
 		msg.forward_from and msg.forward_from.is_bot
 		))
 
+
 class LogStruct:
 	def __init__(self, need_log: bool, fmt_log: str, *fmt_args):
 		self.need_log = need_log
 		self.fmt_log = fmt_log
 		self.fmt_args = fmt_args
 
-class BlackListForwardRequest:
+
+class BasicForwardRequest:
 	def __init__(self, msg: Message, log: LogStruct = LogStruct(False, '')):
 		self.msg = msg
 		self.log = log
 
-class ForwardRequest(BlackListForwardRequest):
+
+class BlackListForwardRequest(BasicForwardRequest): pass
+
+
+class ForwardRequest(BasicForwardRequest):
 
 	def __init__(self, target_id: int, msg: Message, log: LogStruct = LogStruct(False, '')):
 		super().__init__(msg, log)
@@ -68,6 +76,7 @@ class ForwardRequest(BlackListForwardRequest):
 	def from_super(cls, target_id: int, request: BlackListForwardRequest):
 		return cls(target_id, request.msg, request.log)
 
+
 class Plugin:
 
 	@classmethod
@@ -75,16 +84,16 @@ class Plugin:
 		self = cls()
 		return self
 
-	async def plugin_start(self) -> NoReturn:
+	async def plugin_start(self) -> None:
 		pass
 
-	async def plugin_pending_start(self) -> NoReturn:
+	async def plugin_pending_start(self) -> None:
 		pass
 
-	async def plugin_pending_stop(self) -> NoReturn:
+	async def plugin_pending_stop(self) -> None:
 		pass
 
-	async def plugin_stop(self) -> NoReturn:
+	async def plugin_stop(self) -> None:
 		pass
 
 
@@ -99,19 +108,19 @@ class _Requirement:
 
 
 class PluginLoader:
-	
+
 	def __init__(self, module: _PluginModule, module_name: str, client: Client, config: ConfigParser, database: checkfile):
 		self.requirement: Dict[str, bool] = module.requirement
 		self.args: List[T] = [client]
-		_requirement = _Requirement(self.requirement.get('config'), self.requirement.get('database'))
+		_requirement = _Requirement(self.requirement.get('config'), self.requirement.get('database')) # type: ignore
 		if _requirement.config:
 			self.args.append(config)
 		if _requirement.database:
 			self.args.append(database)
 		self.module: T = module
 		self.module_name: str = module_name
-		self.instance: Plugin = None
-	
+		self.instance: Plugin = None # type: ignore
+
 	async def __call__(self) -> Plugin:
 		await self.create_instace()
 		return self.instance
@@ -120,12 +129,15 @@ class PluginLoader:
 		self.instance = await getattr(self.module, self.module_name).create_plugin(*self.args)
 		return self
 
+
 @dataclass
 class TracebackableCallable:
-	callback: Callable[[], ...]
+	callback: Callable[[], Awaitable[T]]
 
-	async def __call__(self) -> NoReturn:
+	async def __call__(self) -> None:
 		try:
 			await self.callback()
+		except GeneratorExit:
+			pass
 		except:
 			traceback.print_exc()
