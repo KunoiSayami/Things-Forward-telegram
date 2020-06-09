@@ -30,37 +30,37 @@ T = TypeVar('T')
 
 
 def get_msg_key(msg: Message, key1: str, key2: str, fallback: T=None) -> T:
-	try:
-		return msg[key1][key2]
-	except:
-		return fallback
+    try:
+        return msg[key1][key2]
+    except:
+        return fallback
 
 def get_forward_id(msg: Message, fallback: T=None) -> Union[T, int]:
-	if msg.forward_from_chat: return msg.forward_from_chat.id
-	if msg.forward_from: return msg.forward_from.id
-	return fallback
+    if msg.forward_from_chat: return msg.forward_from_chat.id
+    if msg.forward_from: return msg.forward_from.id
+    return fallback
 
 def get_msg_from(msg: Message) -> int:
-	return msg.from_user.id if msg.from_user else msg.chat.id
+    return msg.from_user.id if msg.from_user else msg.chat.id
 
 def is_bot(msg: Message) -> bool:
-	return any((
-		msg.from_user and msg.from_user.is_bot,
-		msg.forward_from and msg.forward_from.is_bot
-		))
+    return any((
+        msg.from_user and msg.from_user.is_bot,
+        msg.forward_from and msg.forward_from.is_bot
+        ))
 
 
 class LogStruct:
-	def __init__(self, need_log: bool, fmt_log: str, *fmt_args):
-		self.need_log = need_log
-		self.fmt_log = fmt_log
-		self.fmt_args = fmt_args
+    def __init__(self, need_log: bool, fmt_log: str, *fmt_args):
+        self.need_log = need_log
+        self.fmt_log = fmt_log
+        self.fmt_args = fmt_args
 
 
 class BasicForwardRequest:
-	def __init__(self, msg: Message, log: LogStruct = LogStruct(False, '')):
-		self.msg = msg
-		self.log = log
+    def __init__(self, msg: Message, log: LogStruct = LogStruct(False, '')):
+        self.msg = msg
+        self.log = log
 
 
 class BlackListForwardRequest(BasicForwardRequest): pass
@@ -68,76 +68,76 @@ class BlackListForwardRequest(BasicForwardRequest): pass
 
 class ForwardRequest(BasicForwardRequest):
 
-	def __init__(self, target_id: int, msg: Message, log: LogStruct = LogStruct(False, '')):
-		super().__init__(msg, log)
-		self.target_id = target_id
+    def __init__(self, target_id: int, msg: Message, log: LogStruct = LogStruct(False, '')):
+        super().__init__(msg, log)
+        self.target_id = target_id
 
-	@classmethod
-	def from_super(cls, target_id: int, request: BlackListForwardRequest):
-		return cls(target_id, request.msg, request.log)
+    @classmethod
+    def from_super(cls, target_id: int, request: BlackListForwardRequest):
+        return cls(target_id, request.msg, request.log)
 
 
 class Plugin:
 
-	@classmethod
-	async def create_plugin(cls, *_args) -> 'Plugin':
-		self = cls()
-		return self
+    @classmethod
+    async def create_plugin(cls, *_args) -> 'Plugin':
+        self = cls()
+        return self
 
-	async def plugin_start(self) -> None:
-		pass
+    async def plugin_start(self) -> None:
+        pass
 
-	async def plugin_pending_start(self) -> None:
-		pass
+    async def plugin_pending_start(self) -> None:
+        pass
 
-	async def plugin_pending_stop(self) -> None:
-		pass
+    async def plugin_pending_stop(self) -> None:
+        pass
 
-	async def plugin_stop(self) -> None:
-		pass
+    async def plugin_stop(self) -> None:
+        pass
 
 
 class _PluginModule:
-	requirement: Dict[str, bool]
+    requirement: Dict[str, bool]
 
 
 @dataclass
 class _Requirement:
-	config: bool
-	database: bool
+    config: bool
+    database: bool
 
 
 class PluginLoader:
 
-	def __init__(self, module: _PluginModule, module_name: str, client: Client, config: ConfigParser, database: checkfile):
-		self.requirement: Dict[str, bool] = module.requirement
-		self.args: List[T] = [client]
-		_requirement = _Requirement(self.requirement.get('config'), self.requirement.get('database')) # type: ignore
-		if _requirement.config:
-			self.args.append(config)
-		if _requirement.database:
-			self.args.append(database)
-		self.module: T = module
-		self.module_name: str = module_name
-		self.instance: Plugin = None # type: ignore
+    def __init__(self, module: _PluginModule, module_name: str, client: Client, config: ConfigParser, database: checkfile):
+        self.requirement: Dict[str, bool] = module.requirement
+        self.args: List[T] = [client]
+        _requirement = _Requirement(self.requirement.get('config'), self.requirement.get('database')) # type: ignore
+        if _requirement.config:
+            self.args.append(config)
+        if _requirement.database:
+            self.args.append(database)
+        self.module: T = module
+        self.module_name: str = module_name
+        self.instance: Plugin = None # type: ignore
 
-	async def __call__(self) -> Plugin:
-		await self.create_instace()
-		return self.instance
+    async def __call__(self) -> Plugin:
+        await self.create_instace()
+        return self.instance
 
-	async def create_instace(self) -> 'PluginLoader':
-		self.instance = await getattr(self.module, self.module_name).create_plugin(*self.args)
-		return self
+    async def create_instace(self) -> 'PluginLoader':
+        self.instance = await getattr(self.module, self.module_name).create_plugin(*self.args)
+        return self
 
 
 @dataclass
 class TracebackableCallable:
-	callback: Callable[[], Awaitable[T]]
+    callback: Callable[[], Awaitable[T]]
 
-	async def __call__(self) -> None:
-		try:
-			await self.callback()
-		except GeneratorExit:
-			pass
-		except:
-			traceback.print_exc()
+    async def __call__(self) -> None:
+        try:
+            await self.callback()
+        except GeneratorExit:
+            pass
+        except:
+            traceback.print_exc()
