@@ -19,13 +19,14 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 import asyncio
 from collections.abc import Iterable
-from typing import Dict, List, Sequence, Tuple, Union
+from typing import Dict, List, Sequence, Tuple, TypeVar, Union
 
 import aiomysql
 from pyrogram import Photo
 
 from libpy3.aiomysqldb import MySqlDB
 
+mixedType = TypeVar('mixedType', str, int)
 
 class checkfile(MySqlDB):
     min_resolution = 120
@@ -58,13 +59,13 @@ class checkfile(MySqlDB):
     async def checkFile_dirty(self, file_id: str) -> bool:
         return await self.query1("SELECT `id` FROM `file_id` WHERE `id` = %s", file_id) is None
 
-    async def insert_log(self, *args: Tuple[Tuple[str, ...], ...]) -> None:
+    async def insert_log(self, *args: Tuple[Tuple[mixedType, ...], ...]) -> None:
         await self.execute("INSERT INTO `msg_detail` (`to_chat`, `to_msg`, `from_chat`, `from_id`, `from_user`, `from_forward`) \
             VALUES (%s, %s, %s, %s, %s, %s)", args) # type: ignore
 
-    @staticmethod
-    def check_photo(photo: Photo) -> bool:
-        return not (photo.file_size / (photo.width * photo.height) * 1000 < checkfile.min_resolution or photo.file_size < 40960)
+    @classmethod
+    def check_photo(cls, photo: Photo) -> bool:
+        return not (photo.file_size / (photo.width * photo.height) * 1000 < cls.min_resolution or photo.file_size < 40960)
 
     async def update_forward_target(self, chat_id: int, target: str) -> None:
         if await self.query1("SELECT * FROM `special_forward` WHERE `chat_id` = %s", chat_id):

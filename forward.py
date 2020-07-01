@@ -18,6 +18,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 import asyncio
+from asyncio.events import TimerHandle
 import concurrent.futures
 import importlib
 import logging
@@ -25,38 +26,36 @@ import os
 import random
 import re
 import string
+import time
 from configparser import ConfigParser
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import aioredis
+import coloredlogs
 import pyrogram.errors
+import telethon
 from pymysql.err import ProgrammingError
 from pyrogram import (Client, ContinuePropagation, Filters, Message,
                       MessageHandler, api)
 
+import telethonlib
 from configure import configure
 from fileid_checker import checkfile
-from utils import (BlackListForwardRequest, ForwardRequest, LogStruct,
-                   PluginLoader, TracebackableCallable, get_forward_id,
-                   get_msg_from, is_bot)
+from utils import (AlbumForwardRequest, AlbumStructure,
+                   BlackListForwardRequest, ForwardRequest, LogStruct,
+                   MediaGroupObjectStore, PluginLoader, TracebackableCallable,
+                   get_chat_id, get_forward_id, get_forward_id_a,
+                   get_msg_forward_from, get_msg_from, get_msg_from_a, is_bot)
 
 logger = logging.getLogger('forward_main')
 logger.setLevel(logging.DEBUG)
 
 
 class ForwardThread:
-
     @dataclass
     class _IDObject:
         id: int
-
-    class _BuildInMessage:
-        def __init__(self, chat_id: int, msg_id: int, from_user_id: int=-1, forward_from_id: int=-1):
-            self.chat: ForwardThread._IDObject = ForwardThread._IDObject(chat_id)
-            self.message_id: int = msg_id
-            self.from_user: ForwardThread._IDObject = ForwardThread._IDObject(from_user_id)
-            self.forward_from: ForwardThread._IDObject = ForwardThread._IDObject(forward_from_id)
 
     queue: asyncio.Queue = asyncio.Queue()
     switch: bool = True
@@ -68,6 +67,7 @@ class ForwardThread:
         `msg_id` : Forward from message id
         `Loginfo` structure: (need_log: bool, log_msg: str, args: tulpe)
     '''
+
     def __init__(self):
         self.checker: checkfile = checkfile.get_instance()
         self.configure: configure = configure.get_instance()
@@ -77,17 +77,23 @@ class ForwardThread:
         self.logger.setLevel(logging.INFO)
         self.logger.addHandler(log_file_header)
         self.logger.propagate = False
+        self.check_handle: concurrent.futures.Future = None
+        self.check_timer: TimerHandle = None
 
     @classmethod
     def put_blacklist(cls, request: BlackListForwardRequest) -> None:
-        cls.put(ForwardRequest.from_super(configure.get_instance().blacklist, request)) # type: ignore
+        cls.put(ForwardRequest.from_super(configure.get_instance().blacklist, request))  # type: ignore
 
     @classmethod
     def put(cls, request: ForwardRequest) -> None:
         cls.queue.put_nowait(request)
 
     @classmethod
-    async def get(cls) -> ForwardRequest:
+    def put_album(cls, request: AlbumForwardRequest) -> None:
+        cls.queue.put_nowait(request)
+
+    @classmethod
+    async def get(cls) -> Union[ForwardRequest, AlbumForwardRequest]:
         return await cls.queue.get()
 
     @classmethod
@@ -97,32 +103,68 @@ class ForwardThread:
     def start(self) -> None:
         asyncio.run_coroutine_threadsafe(TracebackableCallable(self._run)(), asyncio.get_event_loop())
 
+    async def process_pyrogram_forward(self, request: ForwardRequest) -> None:
+        try:
+            r = await request.msg.forward(request.target_id, True)
+            await self.checker.insert_log(r.chat.id, r.message_id, request.msg.chat.id,
+                                            request.msg.message_id, get_msg_from(request.msg), #type: ignore
+                                            get_forward_id(request.msg, -1))  # type: ignore
+            if request.log.need_log:
+                self.logger.info(request.log.fmt_log, *request.log.fmt_args)
+        except ProgrammingError:
+            raise
+        except pyrogram.errors.exceptions.bad_request_400.MessageIdInvalid:
+            pass
+        except:
+            if request.msg and request.target_id != self.configure.blacklist:
+                print(repr(request.msg))
+            # self.put(target_id, chat_id, msg_id, request.log, msg_raw)
+            logger.exception('Got other exceptions in forward thread')
+
+    async def process_telethon_forward(self, request: AlbumForwardRequest) -> None:
+        try:
+            msgs = await request.forward()
+            for x in range(len(msgs)):
+                await self.checker.insert_log(request.target_id, msgs[x].id, request.msgs[x].to_id.channel_id, # type: ignore
+                                            request.msgs[x].id, get_msg_from_a(request.msgs[x]), # type: ignore
+                                            get_forward_id_a(request.msgs[x], -1)) # type: ignore
+                if request.log.need_log:
+                    self.logger.info(request.log.fmt_log, *request.log.fmt_args)
+        except:
+            if request.msgs and request.target_id != self.configure.blacklist:
+                print(request.msgs[0].stringify())
+            logger.exception('Got other exceptions in forward thread')
+
+    async def _check_media_store(self) -> None:
+        m = MediaGroupObjectStore.get_instance()
+        if len(m):
+            for key, item in m.enum():
+                if time.time() - item.timestamp > 60:
+                    await m.pop(key)
+        del m
+        self.check_timer = asyncio.get_event_loop().call_later(60, self.schedule_run_check)
+
+    def schedule_run_check(self) -> None:
+        self.check_handle = asyncio.run_coroutine_threadsafe(self._check_media_store(), asyncio.get_event_loop())
+
     async def _run(self) -> None:
+        self.schedule_run_check()
         while self.get_status():
             task = asyncio.create_task(self.get())
             while True:
                 result, _pending = await asyncio.wait([task], timeout=1)
                 if len(result):
                     request = result.pop().result()
+                    if isinstance(request, AlbumForwardRequest):
+                        await self.process_telethon_forward(request)
+                    else:
+                        await self.process_pyrogram_forward(request)
                     break
                 if not self.get_status():
                     task.cancel()
+                    self.check_timer.cancel()
+                    self.check_handle.cancel()
                     return
-            try:
-                r = await request.msg.forward(request.target_id, True)
-                await self.checker.insert_log(r.chat.id, r.message_id, request.msg.chat.id,
-                    request.msg.message_id, get_msg_from(request.msg), get_forward_id(request.msg, -1)) # type: ignore
-                if request.log.need_log:
-                    self.logger.info(request.log.fmt_log, *request.log.fmt_args)
-            except ProgrammingError:
-                logger.exception("Got programming error in forward thread")
-            except pyrogram.errors.exceptions.bad_request_400.MessageIdInvalid:
-                pass
-            except:
-                if request.msg and request.target_id != self.configure.blacklist:
-                    print(repr(request.msg))
-                #self.put(target_id, chat_id, msg_id, request.log, msg_raw)
-                logger.exception('Got other exceptions in forward thread')
             await asyncio.sleep(.5)
 
 
@@ -149,7 +191,8 @@ class SetTypingCoroutine:
 
 class GetHistoryCoroutine:
 
-    def __init__(self, client: Client, chat_id: int, target_id:  Union[int, str], offset_id: int=0, dirty_run: bool=False):
+    def __init__(self, client: Client, chat_id: int, target_id: Union[int, str], offset_id: int = 0,
+                 dirty_run: bool = False):
         self.checker: checkfile = checkfile.get_instance()
         self.configure: configure = configure.get_instance()
         self.client: Client = client
@@ -158,30 +201,34 @@ class GetHistoryCoroutine:
         self.chat_id: int = chat_id
         self.dirty_run: bool = dirty_run
         self.start()
-    
-    def start(self) -> None:
-        asyncio.run_coroutine_threadsafe(TracebackableCallable(self.run)(), asyncio.get_event_loop())
+
+    def start(self) -> concurrent.futures.Future:
+        return asyncio.run_coroutine_threadsafe(TracebackableCallable(self.run)(), asyncio.get_event_loop())
 
     async def run(self) -> None:
         checkfunc = self.checker.checkFile if not self.dirty_run else self.checker.checkFile_dirty
         photos, videos, docs = [], [], []
         msg_group = await self.client.get_history(self.target_id, offset_id=self.offset_id)
-        await self.client.send_message(self.chat_id, 'Now process query {}, total {} messages{}'.format(self.target_id, msg_group.messages[0]['message_id'],
-            ' (Dirty mode)' if self.dirty_run else ''))
+        await self.client.send_message(self.chat_id, 'Now process query {}, total {} messages{}'.format(self.target_id,
+                                                                                                        msg_group.messages[
+                                                                                                            0][
+                                                                                                            'message_id'],
+                                                                                                        ' (Dirty mode)' if self.dirty_run else ''))
         status_thread = SetTypingCoroutine(self.client, self.chat_id)
         self.offset_id = msg_group.messages[0]['message_id']
         while self.offset_id > 1:
             for x in list(msg_group.messages):
                 if x.photo:
                     if not await checkfunc(x.photo.sizes[-1].file_id): continue
-                    photos.append((is_bot(x), {'chat':{'id': self.target_id}, 'message_id': x['message_id']}))
+                    photos.append((is_bot(x), {'chat': {'id': self.target_id}, 'message_id': x['message_id']}))
                 elif x.video:
                     if not await checkfunc(x.video.file_id): continue
-                    videos.append((is_bot(x), {'chat':{'id': self.target_id}, 'message_id': x['message_id']}))
+                    videos.append((is_bot(x), {'chat': {'id': self.target_id}, 'message_id': x['message_id']}))
                 elif x.document:
-                    if '/' in x.document.mime_type and x.document.mime_type.split('/')[0] in ('image', 'video') and not await checkfunc((x.document.file_id)):
+                    if '/' in x.document.mime_type and x.document.mime_type.split('/')[0] in (
+                    'image', 'video') and not await checkfunc((x.document.file_id)):
                         continue
-                    docs.append((is_bot(x), {'chat':{'id': self.target_id}, 'message_id': x['message_id']}))
+                    docs.append((is_bot(x), {'chat': {'id': self.target_id}, 'message_id': x['message_id']}))
             try:
                 self.offset_id = msg_group.messages[-1]['message_id'] - 1
             except IndexError:
@@ -197,42 +244,60 @@ class GetHistoryCoroutine:
             await self.client.send_message(self.configure.query_video, f'Begin {self.target_id} forward')
             await self.client.send_message(self.configure.query_doc, f'Begin {self.target_id} forward')
             for x in reversed(photos):
-                ForwardThread.put(ForwardRequest(self.configure.query_photo if not x[0] else self.configure.bot_for, x[1]))
+                ForwardThread.put(
+                    ForwardRequest(self.configure.query_photo if not x[0] else self.configure.bot_for, x[1]))
             for x in reversed(videos):
-                ForwardThread.put(ForwardRequest(self.configure.query_video if not x[0] else self.configure.bot_for, x[1]))
+                ForwardThread.put(
+                    ForwardRequest(self.configure.query_video if not x[0] else self.configure.bot_for, x[1]))
             for x in reversed(docs):
-                ForwardThread.put(ForwardRequest(self.configure.query_doc if not x[0] else self.configure.bot_for, x[1]))
+                ForwardThread.put(
+                    ForwardRequest(self.configure.query_doc if not x[0] else self.configure.bot_for, x[1]))
         status_thread.setOff()
-        await self.client.send_message(self.chat_id, 'Query completed {} photos, {} videos, {} docs{}'.format(len(photos), len(videos), len(docs), ' (Dirty mode)' if self.dirty_run else ''))
-        logger.info('Query %d completed%s, total %d photos, %d videos, %d documents.', self.target_id, ' (Dirty run)' if self.dirty_run else '', len(photos), len(videos), len(docs))
+        await self.client.send_message(self.chat_id,
+                                       'Query completed {} photos, {} videos, {} docs{}'.format(len(photos),
+                                                                                                len(videos), len(docs),
+                                                                                                ' (Dirty mode)' if self.dirty_run else ''))
+        logger.info('Query %d completed%s, total %d photos, %d videos, %d documents.', self.target_id,
+                    ' (Dirty run)' if self.dirty_run else '', len(photos), len(videos), len(docs))
         del photos, videos, docs
+
 
 class UnsupportType(Exception): pass
 
-class BotControler:
+
+class ForwardBot:
     def __init__(self, config: ConfigParser):
         self.configure = configure.init_instance(config)
         self.app = Client(
-            'inforward',
+            'forward',
             config.get('account', 'api_id'),
             config.get('account', 'api_hash')
         )
-        self.checker: checkfile = None # type: ignore
+
+        self.teleapp = telethonlib.TelethonClient(
+            'subforward',
+            config.getint('account', 'api_id'),
+            config.get('account', 'api_hash'),
+            on_album=self.on_album)
+
+        self.album_store: MediaGroupObjectStore = MediaGroupObjectStore.create_instance()
+
+        self.checker: checkfile = None  # type: ignore
 
         self.redis: aioredis.Redis = None
         self.redis_prefix: str = ''.join(random.choices(string.ascii_lowercase, k=5))
 
-        self.ForwardThread: ForwardThread = None # type: ignore
+        self.ForwardThread: ForwardThread = None  # type: ignore
 
         self.min_resolution: int = config.getint('forward', 'lowq_resolution', fallback=120)
         self.owner_group_id: int = config.getint('account', 'group_id', fallback=-1)
 
         self.echo_switch: bool = False
         self.detail_msg_switch: bool = False
-        #self.delete_blocked_message_after_blacklist: bool = False
-        self.func_blacklist: Callable[[], int] = None # type: ignore
+        # self.delete_blocked_message_after_blacklist: bool = False
+        self.func_blacklist: Callable[[], int] = None  # type: ignore
         if self.configure.blacklist:
-            self.func_blacklist = ForwardThread.put_blacklist # type: ignore
+            self.func_blacklist = ForwardThread.put_blacklist  # type: ignore
         self.custom_switch: bool = False
 
         self.init_handle()
@@ -240,9 +305,11 @@ class BotControler:
         self.plugins: List[PluginLoader] = []
 
     @classmethod
-    async def create(cls, config: ConfigParser):
+    async def create(cls, config: ConfigParser) -> 'ForwardBot':
+        logger.info('Creating bot class instance')
         self = cls(config)
-        self.checker = await checkfile.init_instance(config.get('mysql', 'host'), config.get('mysql', 'username'), config.get('mysql', 'passwd'), config.get('mysql', 'database'))
+        self.checker = await checkfile.init_instance(config.get('mysql', 'host'), config.get('mysql', 'username'),
+                                                     config.get('mysql', 'passwd'), config.get('mysql', 'database'))
         self.redis = await aioredis.create_redis_pool('redis://localhost')
         self.ForwardThread = ForwardThread()
         await self.redis.sadd(f'{self.redis_prefix}for_bypass', *await self.checker.query_all_bypass())
@@ -251,40 +318,51 @@ class BotControler:
         await self.redis.sadd(f'{self.redis_prefix}for_admin', *await self.checker.query_all_admin())
         await self.redis.sadd(f'{self.redis_prefix}for_admin', config.getint('account', 'owner'))
         await self.load_plugins(config)
+        logger.info('Create successful')
         return self
 
     async def clean(self):
         await self.redis.delete(f'{self.redis_prefix}for_bypass')
         await self.redis.delete(f'{self.redis_prefix}for_blacklist')
-        await self.redis.delete(' '.join(map(str, (key for key, _ in (await self.checker.query_all_special_forward()).items()))))
+        await self.redis.delete(
+            ' '.join(map(str, (key for key, _ in (await self.checker.query_all_special_forward()).items()))))
         await self.redis.delete(f'{self.redis_prefix}for_admin')
 
     def init_handle(self) -> None:
-        self.app.add_handler(MessageHandler(self.get_msg_from_owner_group,			Filters.chat(self.owner_group_id) & Filters.reply))
-        self.app.add_handler(MessageHandler(self.get_command_from_target,			Filters.chat(self.configure.predefined_group_list) & Filters.text & Filters.reply))
-        self.app.add_handler(MessageHandler(self.pre_check, 						Filters.media & ~Filters.private & ~Filters.sticker & ~Filters.voice & ~Filters.web_page))
-        self.app.add_handler(MessageHandler(self.handle_photo,						Filters.photo & ~Filters.private & ~Filters.chat([self.configure.photo, self.configure.lowq])))
-        self.app.add_handler(MessageHandler(self.handle_video,						Filters.video & ~Filters.private & ~Filters.chat(self.configure.video)))
-        self.app.add_handler(MessageHandler(self.handle_gif,						Filters.animation & ~Filters.private & ~Filters.chat(self.configure.gif)))
-        self.app.add_handler(MessageHandler(self.handle_document,					Filters.document & ~Filters.private & ~Filters.chat(self.configure.doc)))
-        self.app.add_handler(MessageHandler(self.handle_other,						Filters.media & ~Filters.private & ~Filters.sticker & ~Filters.voice & ~Filters.web_page))
-        self.app.add_handler(MessageHandler(self.pre_private,						Filters.private))
-        self.app.add_handler(MessageHandler(self.handle_add_bypass,					Filters.command('e') & Filters.private))
-        self.app.add_handler(MessageHandler(self.process_query,						Filters.command('q') & Filters.private))
-        self.app.add_handler(MessageHandler(self.handle_add_black_list,				Filters.command('b') & Filters.private))
-        self.app.add_handler(MessageHandler(self.process_show_detail,				Filters.command('s') & Filters.private))
-        self.app.add_handler(MessageHandler(self.set_forward_target_reply,			Filters.command('f') & Filters.reply & Filters.private))
-        self.app.add_handler(MessageHandler(self.set_forward_target,				Filters.command('f') & Filters.private))
-        self.app.add_handler(MessageHandler(self.add_user,							Filters.command('a') & Filters.private))
-        self.app.add_handler(MessageHandler(self.change_code,						Filters.command('pw') & Filters.private))
-        self.app.add_handler(MessageHandler(self.undo_blacklist_operation,			Filters.command('undo') & Filters.private))
-        self.app.add_handler(MessageHandler(self.switch_detail2,					Filters.command('sd2') & Filters.private))
-        self.app.add_handler(MessageHandler(self.switch_detail,						Filters.command('sd') & Filters.private))
-        #self.app.add_handler(MessageHandler(self.callstopfunc,						Filters.command('stop') & Filters.private))
-        self.app.add_handler(MessageHandler(self.show_help_message,					Filters.command('help') & Filters.private))
-        self.app.add_handler(MessageHandler(self.process_private,					Filters.private))
+        self.app.add_handler(
+            MessageHandler(self.get_msg_from_owner_group, Filters.chat(self.owner_group_id) & Filters.reply))
+        self.app.add_handler(MessageHandler(self.get_command_from_target, Filters.chat(
+            self.configure.predefined_group_list) & Filters.text & Filters.reply))
+        self.app.add_handler(MessageHandler(self.pre_check,
+                                            Filters.media & ~Filters.private & ~Filters.sticker & ~Filters.voice & ~Filters.web_page & ~Filters.contact))
+        self.app.add_handler(MessageHandler(self.handle_photo, Filters.photo & ~Filters.private & ~Filters.chat(
+            [self.configure.photo, self.configure.lowq])))
+        self.app.add_handler(
+            MessageHandler(self.handle_video, Filters.video & ~Filters.private & ~Filters.chat(self.configure.video)))
+        self.app.add_handler(
+            MessageHandler(self.handle_gif, Filters.animation & ~Filters.private & ~Filters.chat(self.configure.gif)))
+        self.app.add_handler(MessageHandler(self.handle_document,
+                                            Filters.document & ~Filters.private & ~Filters.chat(self.configure.doc)))
+        self.app.add_handler(MessageHandler(self.handle_other,
+                                            Filters.media & ~Filters.private & ~Filters.sticker & ~Filters.voice & ~Filters.web_page))
+        self.app.add_handler(MessageHandler(self.pre_private, Filters.private))
+        self.app.add_handler(MessageHandler(self.handle_add_bypass, Filters.command('e') & Filters.private))
+        self.app.add_handler(MessageHandler(self.process_query, Filters.command('q') & Filters.private))
+        self.app.add_handler(MessageHandler(self.handle_add_black_list, Filters.command('b') & Filters.private))
+        self.app.add_handler(MessageHandler(self.process_show_detail, Filters.command('s') & Filters.private))
+        self.app.add_handler(
+            MessageHandler(self.set_forward_target_reply, Filters.command('f') & Filters.reply & Filters.private))
+        self.app.add_handler(MessageHandler(self.set_forward_target, Filters.command('f') & Filters.private))
+        self.app.add_handler(MessageHandler(self.add_user, Filters.command('a') & Filters.private))
+        self.app.add_handler(MessageHandler(self.change_code, Filters.command('pw') & Filters.private))
+        self.app.add_handler(MessageHandler(self.undo_blacklist_operation, Filters.command('undo') & Filters.private))
+        self.app.add_handler(MessageHandler(self.switch_detail2, Filters.command('sd2') & Filters.private))
+        self.app.add_handler(MessageHandler(self.switch_detail, Filters.command('sd') & Filters.private))
+        self.app.add_handler(MessageHandler(self.show_help_message, Filters.command('help') & Filters.private))
+        self.app.add_handler(MessageHandler(self.process_private, Filters.private))
 
     async def load_plugins(self, config: ConfigParser):
+        logger.info('Loading all plugins')
         try:
             for root, _dirs, filenames in os.walk('.'):
                 if root != '.':
@@ -295,9 +373,10 @@ class BotControler:
                     module_name = filename.split('.py')[0]
                     try:
                         mod = importlib.import_module(module_name)
-                        loader = await PluginLoader(mod, module_name, self.app, config, checkfile).create_instace() # type: ignore
-                        await loader.instance.plugin_pending_start() # type: ignore
-                        self.plugins.append(loader) # type: ignore
+                        loader = await PluginLoader(mod, module_name, self.app, config, # type: ignore
+                                                    checkfile).create_instace()  # type: ignore
+                        await loader.instance.plugin_pending_start()  # type: ignore
+                        self.plugins.append(loader)  # type: ignore
                     except:
                         logger.exception('Loading plugin: %s catch exception!', module_name)
                     else:
@@ -305,21 +384,21 @@ class BotControler:
         except FileNotFoundError:
             pass
 
-    async def start_plugins(self):
+    async def start_plugins(self) -> None:
         for x in self.plugins:
             try:
                 await x.instance.plugin_start()
             except:
                 logger.error('Start %s plugin fail', x.module_name)
 
-    async def stop_plugins(self):
+    async def stop_plugins(self) -> None:
         for x in self.plugins:
             try:
                 await x.instance.plugin_stop()
             except:
                 logger.error('Stop %s plugin fail', x.module_name)
 
-    async def pending_stop_plugins(self):
+    async def pending_stop_plugins(self) -> None:
         for x in self.plugins:
             try:
                 await x.instance.plugin_pending_stop()
@@ -343,12 +422,14 @@ class BotControler:
             if pending_del is not None:
                 if await self.redis.srem(f'{self.redis_prefix}for_blacklist', pending_del):
                     await self.checker.remove_blacklist(pending_del)
-                await client.send_message(self.owner_group_id, f'Remove `{pending_del}` from blacklist', parse_mode='markdown')
+                await client.send_message(self.owner_group_id, f'Remove `{pending_del}` from blacklist',
+                                          parse_mode='markdown')
         except:
-            if msg.reply_to_message.text: print(msg.reply_to_message.text)
+            if msg.reply_to_message.text:
+                print(msg.reply_to_message.text)
             logger.exception('Catch!')
 
-    async def add_black_list(self, user_id: Union[int, dict], post_back_id=None) -> None:
+    async def add_black_list(self, user_id: Union[int, Dict], post_back_id=None) -> None:
         if isinstance(user_id, dict):
             await self.app.send_message(self.owner_group_id, f'User id:`{user_id["from_user"]}`\nFrom '
                                                              f'chat id:`{user_id["from_chat"]}`\nForward '
@@ -358,43 +439,41 @@ class BotControler:
         if user_id is None or await self.redis.sismember(f'{self.redis_prefix}for_admin', user_id):
             raise KeyError
         if await self.redis.sadd(f'{self.redis_prefix}for_blacklist', user_id):
-            await self.checker.insert_blacklist(user_id) # type: ignore
+            await self.checker.insert_blacklist(user_id)  # type: ignore
         logger.info('Add %d to blacklist', user_id)
         if post_back_id is not None:
             await self.app.send_message(post_back_id, f'Add `{user_id}` to blacklist', 'markdown')
 
-    async def del_message_by_id(self, client: Client, msg: Message, send_message_to: Optional[Union[int, str]]=None, forward_control: bool=True) -> None:
+    async def del_message_by_id(self, client: Client, msg: Message, send_message_to: Optional[Union[int, str]] = None,
+                                forward_control: bool = True) -> None:
         if forward_control and self.configure.blacklist == '':
             logger.error('Request forward but blacklist channel not specified')
             return
         id_from_reply = get_forward_id(msg.reply_to_message)
-        q = await self.checker.query("SELECT * FROM `msg_detail` WHERE (`from_chat` = %s OR `from_user` = %s OR `from_forward` = %s) AND `to_chat` != %s",
-            (id_from_reply, id_from_reply, id_from_reply, self.configure.blacklist)) # type: ignore
-        
+        q = await self.checker.query(
+            "SELECT * FROM `msg_detail` WHERE (`from_chat` = %s OR `from_user` = %s OR `from_forward` = %s) AND `to_chat` != %s",
+            (id_from_reply, id_from_reply, id_from_reply, self.configure.blacklist))  # type: ignore
+
         if send_message_to:
             _msg = await client.send_message(send_message_to, f'Find {len(q)} message(s)')
 
             for x in q:
-                try: client.delete_messages(x['to_chat'], x['to_msg'])
-                except: pass
-            await self.checker.execute("DELETE FROM `msg_detail` WHERE (`from_chat` = %s OR `from_user` = %s OR `from_forward` = %s) AND `to_chat` != %s", (
-                id_from_reply, id_from_reply, id_from_reply, self.configure.blacklist)) # type: ignore
+                try:
+                    await client.delete_messages(x['to_chat'], x['to_msg'])
+                except:
+                    pass
+            await self.checker.execute(
+                "DELETE FROM `msg_detail` WHERE (`from_chat` = %s OR `from_user` = %s OR `from_forward` = %s) AND `to_chat` != %s",
+                (
+                    id_from_reply, id_from_reply, id_from_reply, self.configure.blacklist))  # type: ignore
             await _msg.edit(f'Delete all message from `{id_from_reply}` completed.', 'markdown')
         else:
             for x in q:
-                try: client.delete_messages(x['to_chat'], x['to_msg'])
-                except: pass
+                try:
+                    await client.delete_messages(x['to_chat'], x['to_msg'])
+                except:
+                    pass
             await msg.reply(f'Delete all message from `{id_from_reply}` completed.', 'markdown')
-            
-        # if forward_control:
-            # if send_message_to:
-            #     typing = SetTypingCoroutine(client, send_message_to)
-            #for x in q:
-            #	ForwardThread.put_blacklist(x['to_chat'], x['to_msg'], msg_raw=build_log(
-            #		x['from_chat'], x['from_id'], x['from_user'], x['from_forward']))
-            #while not ForwardThread.queue.empty(): time.sleep(0.5)
-            # if send_message_to:
-            #     typing.setOff()
 
     async def get_msg_from_owner_group(self, client: Client, msg: Message) -> None:
         try:
@@ -406,22 +485,24 @@ class BotControler:
     async def get_command_from_target(self, client: Client, msg: Message) -> None:
         if re.match(r'^\/(del(f)?|b|undo|print)$', msg.text):
             if msg.text == '/b':
-                #client.delete_messages(msg.chat.id, msg.message_id)
-                #for_id = get_forward_id(msg.reply_to_message)
+                # client.delete_messages(msg.chat.id, msg.message_id)
+                # for_id = get_forward_id(msg.reply_to_message)
                 for_id = await self.checker.query_forward_from(msg.chat.id, msg.reply_to_message.message_id)
-                #for_id = get_forward_id(msg['reply_to_message'])
+                # for_id = get_forward_id(msg['reply_to_message'])
                 await self.add_black_list(for_id, self.owner_group_id)
                 # To enable delete message, please add `delete other messages' privilege to bot
-                call_delete_msg(30, client.delete_messages, msg.chat.id, (msg.message_id, msg.reply_to_message.message_id))
+                call_delete_msg(30, client.delete_messages, msg.chat.id,
+                                (msg.message_id, msg.reply_to_message.message_id))
             elif msg.text == '/undo':
                 group_id = msg.reply_to_message.message_id if msg.reply_to_message else None
                 if group_id:
                     try:
                         if await self.redis.srem(f'{self.redis_prefix}for_admin', group_id):
                             await self.checker.remove_admin(group_id)
-                        #black_list.remove(group_id)
-                        #self.config['forward']['black_list'] = repr(black_list)
-                        await client.send_message(self.owner_group_id, f'Remove `{group_id}` from blacklist', 'markdown')
+                        # black_list.remove(group_id)
+                        # self.config['forward']['black_list'] = repr(black_list)
+                        await client.send_message(self.owner_group_id, f'Remove `{group_id}` from blacklist',
+                                                  'markdown')
                     except ValueError:
                         await client.send_message(self.owner_group_id, f'`{group_id}` not in blacklist', 'markdown')
             elif msg.text == '/print' and msg.reply_to_message is not None:
@@ -435,9 +516,9 @@ class BotControler:
     def get_file_id(msg: Message, _type: str) -> str:
         return getattr(msg, _type).file_id
 
-    @staticmethod
-    def get_file_type(msg: Message) -> str:
-        s = BotControler._get_file_type(msg)
+    @classmethod
+    def get_file_type(cls, msg: Message) -> str:
+        s = cls._get_file_type(msg)
         if s == 'error':
             raise UnsupportType()
         return s
@@ -446,48 +527,92 @@ class BotControler:
     def _get_file_type(msg: Message) -> str:
         return 'photo' if msg.photo else \
             'video' if msg.video else \
-            'animation' if msg.animation else \
-            'sticker' if msg.sticker else \
-            'voice' if msg.voice else \
-            'document' if msg.document else \
-            'audio' if msg.audio else \
-            'contact' if msg.contact else 'error'
+                'animation' if msg.animation else \
+                    'sticker' if msg.sticker else \
+                        'voice' if msg.voice else \
+                            'document' if msg.document else \
+                                'audio' if msg.audio else \
+                                    'contact' if msg.contact else 'error'
 
     async def pre_check(self, _client: Client, msg: Message) -> None:
         try:
-            if await self.redis.sismember(f'{self.redis_prefix}for_bypass', msg.chat.id) or not await self.checker.checkFile(self.get_file_id(msg, self.get_file_type(msg))):
+            t = self.get_file_type(msg)
+            #if t == 'photo' and msg.media_group_id:
+            #    if await self.album_store.update_item(msg.media_group_id, msg):
+            #        logger.debug('Process forward')
+            #        item = await self.album_store.pop(msg.media_group_id)
+            #        if await item.check():
+            #            await self.forward_msg_a(msg)
+            #    logger.debug('Got media group %d ', msg.media_group_id)
+            #    msg.stop_propagation()
+            #    return
+            if await self.redis.sismember(f'{self.redis_prefix}for_bypass',
+                                          msg.chat.id) or not await self.checker.checkFile(
+                    self.get_file_id(msg, t)):
                 return
         except UnsupportType:
             pass
         else:
             raise ContinuePropagation
 
-    async def blacklist_checker(self, msg: Message) -> None:
-        return await self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.chat.id) or \
-                (msg.from_user and await self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.from_user.id)) or \
-                (msg.forward_from and await self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.forward_from.id)) or \
-                (msg.forward_from_chat and await self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.forward_from_chat.id))
+    async def blacklist_checker_a(self, msg: telethon.events.Album.Event) -> bool:
+        forward_from = get_forward_id_a(msg.original_update.message)
+        return await self.redis.sismember(f'{self.redis_prefix}for_blacklist', get_msg_from_a(msg.original_update.message)) or \
+               (forward_from and await self.redis.sismember(f'{self.redis_prefix}for_blacklist', forward_from)) # type: ignore
 
-    async def forward_msg(self, msg: Message, to: int, what: str='photo') -> None:
-        if await self.blacklist_checker(msg):
-            # if msg.from_user and msg.from_user.id == 630175608: return # block tgcn-captcha
-            self.func_blacklist(BlackListForwardRequest(msg, LogStruct(True, 'forward blacklist context %s from %s (id: %d)', what, msg.chat.title, msg.chat.id))) # type: ignore
+    async def blacklist_checker(self, msg: Message) -> bool:
+        return await self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.chat.id) or \
+               (msg.from_user and await self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.from_user.id)) or \
+               (msg.forward_from and await self.redis.sismember(f'{self.redis_prefix}for_blacklist',
+                                                                msg.forward_from.id)) or \
+               (msg.forward_from_chat and await self.redis.sismember(f'{self.redis_prefix}for_blacklist',
+                                                                     msg.forward_from_chat.id))
+
+    async def forward_msg_a(self, msg: AlbumStructure) -> None:
+        if await self.blacklist_checker_a(msg):
+            return
+        forward_target = self.configure.photo
+        spec_target = await self.redis.get(str(get_chat_id(msg)))
+        if spec_target is None:
+            forward_from = get_msg_forward_from(msg)
+            if forward_from:
+                spec_target = await self.redis.get(str(forward_from))
+        if spec_target is not None:
+            forward_from = getattr(self.configure, spec_target.decode())
+        self.ForwardThread.put_album(AlbumForwardRequest(self.teleapp, forward_target, msg.ready_list, LogStruct(True, 'forward %s from id %d', 'photo', get_chat_id(msg))))
+
+
+    async def forward_msg(self, msg: Union[Message, telethon.events.Album.Event], to: int, what: str = 'photo') -> None:
+        if isinstance(msg, Message) and await self.blacklist_checker(msg):
+            if msg.from_user and msg.from_user.id == 630175608: return # block tgcn-captcha
+            self.func_blacklist(BlackListForwardRequest(msg,
+                                                        LogStruct(True, 'forward blacklist context %s from %s (id: %d)',
+                                                                  what, msg.chat.title, msg.chat.id)))  # type: ignore
             return
         forward_target = to
-        #spec_target = None if what == 'other' else await self.redis.get(f'{self.redis_prefix}{msg.chat.id}')
-        spec_target = None if what == 'other' else await self.redis.get(str(msg.chat.id))
+        # spec_target = None if what == 'other' else await self.redis.get(f'{self.redis_prefix}{msg.chat.id}')
+        spec_target = None if what == 'other' else await self.redis.get(str(msg.chat))
         if spec_target is None:
-            #spec_target = await self.redis.get(f'{self.redis_prefix}{msg.forward_from_chat.id}')
-            if msg.forward_from_chat:
-                spec_target = await self.redis.get(str(msg.forward_from_chat.id))
+            # spec_target = await self.redis.get(f'{self.redis_prefix}{msg.forward_from_chat.id}')
+            if msg.forward_from:
+                spec_target = await self.redis.get(str(msg.forward_from.id))
         if spec_target is not None:
             forward_target = getattr(self.configure, spec_target.decode())
         elif is_bot(msg):
             forward_target = self.configure.bot
-        self.ForwardThread.put(ForwardRequest(forward_target, msg, LogStruct(True, 'forward %s from %s (id: %d)', what, msg.chat.title, msg.chat.id)))
+        self.ForwardThread.put(ForwardRequest(forward_target, msg,
+                                              LogStruct(True, 'forward %s from %s (id: %d)', what, msg.chat.title,
+                                                        msg.chat.id)))
+
+    async def on_album(self, event: telethon.events.Album.Event) -> None:
+        return
+        if isinstance(event.original_update.message.media, telethon.tl.types.MessageMediaPhoto):
+            await self.album_store.update_item(event.original_update.message.grouped_id, event)
+        logger.debug('album => %s', event.stringify())
 
     async def handle_photo(self, _client: Client, msg: Message) -> None:
-        await self.forward_msg(msg, self.configure.photo if self.checker.check_photo(msg.photo) else self.configure.lowq)
+        await self.forward_msg(msg,
+                               self.configure.photo if self.checker.check_photo(msg.photo) else self.configure.lowq)
 
     async def handle_video(self, _client: Client, msg: Message) -> None:
         await self.forward_msg(msg, self.configure.video, 'video')
@@ -498,7 +623,8 @@ class BotControler:
     async def handle_document(self, _client: Client, msg: Message):
         if msg.document.file_name.split('.')[-1] in ('com', 'exe', 'bat', 'cmd'):
             return
-        forward_target = self.configure.doc if '/' in msg.document.mime_type and msg.document.mime_type.split('/')[0] in ('image', 'video') else self.configure.other
+        forward_target = self.configure.doc if '/' in msg.document.mime_type and msg.document.mime_type.split('/')[
+            0] in ('image', 'video') else self.configure.other
         await self.forward_msg(msg, forward_target, 'doc' if forward_target != self.configure.other else 'other')
 
     async def handle_other(self, _client: Client, msg: Message) -> None:
@@ -508,7 +634,8 @@ class BotControler:
         if not await self.user_checker(msg):
             await client.send(api.functions.messages.ReportSpam(peer=await client.resolve_peer(msg.chat.id)))
             return
-        await client.send(api.functions.messages.ReadHistory(peer=await client.resolve_peer(msg.chat.id), max_id=msg.message_id))
+        await client.send(
+            api.functions.messages.ReadHistory(peer=await client.resolve_peer(msg.chat.id), max_id=msg.message_id))
         raise ContinuePropagation
 
     async def handle_add_bypass(self, _client: Client, msg: Message) -> None:
@@ -524,7 +651,7 @@ class BotControler:
         r = re.match(r'^\/q (-?\d+)(d)?$', msg.text)
         if r is None:
             return
-        GetHistoryCoroutine(client, msg.chat.id, r.group(1), dirty_run=r.group(2) is not None)
+        GetHistoryCoroutine(client, msg.chat.id, r.group(1), dirty_run=r.group(2) is not None).start()
 
     async def handle_add_black_list(self, _client: Client, msg: Message) -> None:
         try:
@@ -547,11 +674,11 @@ class BotControler:
             await msg.reply('Cannot found special target forward for')
             return
         await self._set_forward_target(int(r.group(1)), r1.group(1), msg)
-        #do_spec_forward.update({int(r.group(1)): r1.group(1)})
-        #self.config['forward']['special'] = repr(do_spec_forward)
-        #await self.checker.update_forward_target(r1.group(1), r.group(1))
-        #self._set_forward_target(r1.group)
-        #msg.reply('Set group `{}` forward to `{}`'.format(r.group(1), r1.group(1)), parse_mode='markdown')
+        # do_spec_forward.update({int(r.group(1)): r1.group(1)})
+        # self.config['forward']['special'] = repr(do_spec_forward)
+        # await self.checker.update_forward_target(r1.group(1), r.group(1))
+        # self._set_forward_target(r1.group)
+        # msg.reply('Set group `{}` forward to `{}`'.format(r.group(1), r1.group(1)), parse_mode='markdown')
 
     async def set_forward_target(self, _client: Client, msg: Message) -> None:
         r = re.match(r'^\/f (-?\d+) (other|photo|bot|video|anime|gif|doc|lowq)$', msg.text)
@@ -560,7 +687,7 @@ class BotControler:
         await self._set_forward_target(int(r.group(1)), r.group(2), msg)
 
     async def _set_forward_target(self, chat_id: int, target: str, msg: Message) -> None:
-        #await self.redis.set(f'{self.redis_prefix}{chat_id}', target)
+        # await self.redis.set(f'{self.redis_prefix}{chat_id}', target)
         await self.redis.set(chat_id, target)
         await self.checker.update_forward_target(chat_id, target)
         await msg.reply(f'Set group `{chat_id}` forward to `{target}`', parse_mode='markdown')
@@ -588,11 +715,6 @@ class BotControler:
         self.detail_msg_switch = not self.detail_msg_switch
         await msg.reply(f'Switch detail print to {self.detail_msg_switch}')
 
-    async def callstopfunc(self, _client: Client, msg: Message) -> None:
-        #msg.reply('Exiting...')
-        #Thread(target=process_exit.exit_process, args=(2,)).start()
-        pass
-
     async def show_help_message(self, _client: Client, msg: Message) -> None:
         await msg.reply(""" Usage:
         /e <chat_id>            Add `chat_id' to bypass list
@@ -608,7 +730,9 @@ class BotControler:
         if self.custom_switch:
             obj = getattr(msg, self.get_file_type(msg), None)
             if obj:
-                await msg.reply('```{}```\n{}'.format(str(obj), 'Resolution: `{}`'.format(msg.photo.file_size/(msg.photo.width * msg.photo.height)*1000) if msg.photo else ''), parse_mode='markdown')
+                await msg.reply('```{}```\n{}'.format(str(obj), 'Resolution: `{}`'.format(
+                    msg.photo.file_size / (msg.photo.width * msg.photo.height) * 1000) if msg.photo else ''),
+                                parse_mode='markdown')
         if self.echo_switch:
             await msg.reply('forward_from = `{}`'.format(get_forward_id(msg, -1)), parse_mode='markdown')
             if self.detail_msg_switch: print(msg)
@@ -619,6 +743,7 @@ class BotControler:
 
     async def start(self) -> None:
         await self.app.start()
+        await self.teleapp.start()
         self.ForwardThread.start()
         await self.start_plugins()
 
@@ -635,25 +760,33 @@ class BotControler:
         if not ForwardThread.queue.empty():
             await asyncio.sleep(0.5)
         await self.app.stop()
+        await self.teleapp.stop()
         await self.stop_plugins()
         await self.clean()
         self.redis.close()
-        await asyncio.wait([asyncio.create_task(self.checker.close()), asyncio.create_task(self.redis.wait_closed())])
+        await asyncio.gather(self.checker.close(), self.redis.wait_closed())
 
-def call_delete_msg(interval: int, func: Callable[[int, Union[int, Tuple[int, ...]]], Message], target_id: int, msg_: Union[int, Tuple[int, ...]]) -> None:
+
+def call_delete_msg(interval: int, func:Callable[[int, Union[int, Tuple[int, ...]]], Message], target_id: int,
+                    msg_: Union[int, Tuple[int, ...]]) -> None:
     asyncio.get_event_loop().call_later(interval, func, target_id, msg_)
+
 
 async def main() -> None:
     config = ConfigParser()
     config.read('config.ini')
-    bot = await BotControler.create(config)
+    bot = await ForwardBot.create(config)
     await bot.start()
     await bot.idle()
     await bot.stop()
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(name)s - %(funcName)s - %(lineno)d - %(message)s')
+    coloredlogs.install(logging.DEBUG,
+                        fmt='%(asctime)s,%(msecs)03d - %(levelname)s - %(name)s - %(funcName)s - %(lineno)d - %(message)s')
     logging.getLogger('pyrogram').setLevel(logging.WARNING)
+    logging.getLogger('telethon.network.mtprotosender').setLevel(logging.WARNING)
+    logging.getLogger('telethon.extensions.messagepacker').setLevel(logging.WARNING)
+    logging.getLogger('telethon.client.updates').setLevel(logging.WARNING)
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
