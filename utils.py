@@ -193,7 +193,7 @@ class TracebackableCallable:
 
 class AlbumStructure:
     pmsg: List[Message]
-    thonmsg: telethon.events.Album.Event
+    thonmsg: List[telethon.tl.patched.Message] = []
     check_status: Optional[bool] = None
     ready_list: List[telethon.tl.patched.Message] = []
     lower: bool = False
@@ -204,35 +204,31 @@ class AlbumStructure:
         self.conn = checkfile.get_instance()
         if isinstance(msg, Message):
             self.pmsg = [msg]
-            self.thonmsg = None
         else:
             self.pmsg = []
-            self.thonmsg = msg
+            self.thonmsg.extend(msg.messages)
             logger.debug('length => %d', len(msg.messages))
 
     def update(self, msg: Union[telethon.events.Album.Event, Message]):
         if isinstance(msg, Message):
             self.pmsg.append(msg)
         else:
-            self.thonmsg = msg
+            self.thonmsg.extend(msg.messages)
     
     def _do_sort(self):
         self.pmsg.sort(key=lambda x: x.message_id)
-    
-    @property
-    def event(self) -> Optional[telethon.events.Album.Event]:
-        return self.thonmsg
+        self.thonmsg.sort(key=lambda x: x.id)
     
     @property
     def timestamp(self) -> int:
         if len(self.pmsg):
             return self.pmsg[0].date
         else:
-            return int(datetime.datetime.timestamp(self.thonmsg.original_update.message.date))
+            return int(datetime.datetime.timestamp(self.thonmsg[0].date))
 
     @property
     def done(self) -> bool:
-        obj = self.thonmsg is not None and len(self.pmsg) == len(self.thonmsg.messages)
+        obj = self.thonmsg is not None and len(self.pmsg) == len(self.thonmsg)
         logger.debug('obj => %s', obj)
         return obj
     
@@ -242,11 +238,11 @@ class AlbumStructure:
         if not self.done:
             raise self.NotReadyError()
         self._do_sort()
-        result = await asyncio.gather(self.conn.checkFile(self.pmsg[i].photo.file_id) for i in range(len(self.pmsg)))
+        result = await asyncio.gather(*[self.conn.checkFile(self.pmsg[i].photo.file_id) for i in range(len(self.pmsg))])
         for i in range(len(result)):
-            self.ready_list.append(self.thonmsg.messages[i])
+            self.ready_list.append(self.thonmsg[i])
         self.check_status = bool(len(self.ready_list))
-        self.lower = sum(map(int, (self.conn.check_photo(x) for x in self.pmsg))) > (len(self.pmsg) // 2)
+        self.lower = sum(map(int, (self.conn.check_photo(x.photo) for x in self.pmsg))) > (len(self.pmsg) // 2)
         del self.pmsg, self.thonmsg
         return self.check_status
 

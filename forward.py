@@ -580,6 +580,7 @@ class ForwardBot:
         if spec_target is not None:
             forward_from = getattr(self.configure, spec_target.decode())
         self.ForwardThread.put_album(AlbumForwardRequest(self.teleapp, forward_target, msg.ready_list, LogStruct(True, 'forward %s from id %d', 'photo', get_chat_id(msg))))
+        logger.debug('Put %d to forward queue', msg.pmsg[0].media_group_id)
 
 
     async def forward_msg(self, msg: Union[Message, telethon.events.Album.Event], to: int, what: str = 'photo') -> None:
@@ -607,8 +608,13 @@ class ForwardBot:
     async def on_album(self, event: telethon.events.Album.Event) -> None:
         return
         if isinstance(event.original_update.message.media, telethon.tl.types.MessageMediaPhoto):
-            await self.album_store.update_item(event.original_update.message.grouped_id, event)
-        logger.debug('album => %s', event.stringify())
+            if await self.album_store.update_item(event.original_update.message.grouped_id, event):
+                logger.debug('Processing forward (album)')
+                item = await self.album_store.pop(event.original_update.message.grouped_id)
+                if await item.check():
+                    self.forward_msg_a(item)
+            logger.debug('Got album length => %d', len(event.messages))
+        #logger.debug('album => %s', event.stringify())
 
     async def handle_photo(self, _client: Client, msg: Message) -> None:
         await self.forward_msg(msg,
