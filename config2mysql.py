@@ -20,13 +20,13 @@
 import asyncio
 from configparser import ConfigParser
 
-from fileid_checker import checkfile
+from fileid_checker import CheckFile
 
 
 async def main():
 	config = ConfigParser()
 	config.read('config.ini')
-	conn = checkfile.create(config.get('mysql', 'host'), config.get('mysql', 'username'), config.get('mysql', 'passwd'), config.get('mysql', 'database'))
+	conn = CheckFile.create(config.get('mysql', 'host'), config.get('mysql', 'username'), config.get('mysql', 'passwd'), config.get('mysql', 'database'))
 	if input('Clear database before import? [y/N]: ').lower() == 'y':
 		await conn.execute('DELETE FROM `user_list`')
 		await conn.execute('DELETE FROM `blacklist`')

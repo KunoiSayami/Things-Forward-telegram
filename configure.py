@@ -21,7 +21,7 @@ from configparser import ConfigParser
 from typing import List, Optional
 
 
-class configure:
+class Configure:
     def __init__(self, config: ConfigParser):
         self._to_photo = config.getint('forward', 'to_photo')
         self._to_video = config.getint('forward', 'to_video')
@@ -100,11 +100,12 @@ class configure:
         return [self.photo, self.video, self.other, self.anime, self.doc, self.gif, self.lowq, self.bot_for]
 
     _instance = None
-    @classmethod
-    def get_instance(cls) -> 'configure':
-        return cls._instance # type: ignore
 
     @classmethod
-    def init_instance(cls, config: ConfigParser) -> 'configure':
+    def get_instance(cls) -> 'Configure':
+        return cls._instance  # type: ignore
+
+    @classmethod
+    def init_instance(cls, config: ConfigParser) -> 'Configure':
         cls._instance = cls(config)
         return cls._instance

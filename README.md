@@ -16,14 +16,14 @@ Python 3.7 and above is required
 
 The following libraries are required:
 
-- pyrogram === 0.17.0-async
-- aiomysql
+- pyrogram
+- asyncpg
 - aioredis
 
 ## Feature
 
 * Support any media except voice messges.
-* Use MySQL engine to check if the target media is duplicated.
+* Use PostgreSQL engine to check if the target media is duplicated.
 * Collect all the videos and pictures from the target group or channel.
 * Customized forwarding methods including Blacklist.
 * The time interval for message forwarding is customized to avoid certain risks including banned accounts.
@@ -31,7 +31,7 @@ The following libraries are required:
 * Prevent possible loss of configuration files by writing configuration files by command at runtime.
 * Set up forwarding and recover blacklists in a more convenient way.
 * Forward the warning messages in the log to a specified group.
-* Document chanel only handles forwarding video and image files.
+* Document channel only handles forwarding video and image files.
 * If you have the authorized password, you can send authorized code to the bot account to get the permission.
 * By using command lines, users can delete all the messages from a certain user in the blacklist.
 * Caption longer than 20 characters will be replaced with the sender's user_id and will be re-sent by the bot. (Optional)
@@ -41,7 +41,7 @@ The following libraries are required:
 * If you don't have `api_id` and `api_hash`, obtain them from [telegram](https://my.telegram.org/apps)
 * Copy `config.ini.default` to `config.ini`
 * Edit forward target
-* Set up MySQL database and tables
+* Set up PostgreSQL database and tables
 * Run `forward.py`
 
 ## License
