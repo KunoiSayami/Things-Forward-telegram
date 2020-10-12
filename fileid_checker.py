@@ -30,25 +30,15 @@ from libpy3.aiopgsqldb import PgSQLdb
 class CheckFile(PgSQLdb):
     min_resolution = 120
 
-    def __init__(self,
-                 host: str,
-                 port: int,
-                 user: str,
-                 password: str,
-                 db: str):
-        self.checker_lock = asyncio.Lock()
-        super().__init__(host, port, user, password, db)
-
     async def check(self, sql: str, exec_sql: str, args=()) -> bool:
-        async with self.checker_lock:
-            try:
-                if await self.query1(sql, args) is None:
-                    await self.execute(exec_sql, args)
-                    return True
-                else:
-                    return False
-            except:
+        try:
+            if await self.query1(sql, args) is None:
+                await self.execute(exec_sql, args)
+                return True
+            else:
                 return False
+        except:
+            return False
 
     async def checkFile(self, file_id: str) -> bool:
         return await self.check('''SELECT "id" FROM "file_id" WHERE "id" = $1''',
@@ -135,14 +125,3 @@ class CheckFile(PgSQLdb):
     async def close_instance(cls) -> None:
         await CheckFile._instance.close()
 
-    @classmethod
-    async def create(cls,
-                     host: str,
-                     port: int,
-                     user: str,
-                     password: str,
-                     db: str
-                     ) -> 'CheckFile':
-        self = cls(host, port, user, password, db)
-        await self.create_connect()
-        return self
