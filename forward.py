@@ -32,7 +32,6 @@ from typing import Callable, List, Optional, Tuple, Union
 
 import aioredis
 import pyrogram.errors
-from pymysql.err import ProgrammingError
 from pyrogram import Client, filters, raw, ContinuePropagation
 from pyrogram.handlers import MessageHandler
 from pyrogram.types import Message
@@ -117,8 +116,6 @@ class ForwardThread:
                                               get_forward_id(request.msg, -1))  # type: ignore
                 if request.log.need_log:
                     self.logger.info(request.log.fmt_log, *request.log.fmt_args)
-            except ProgrammingError:
-                logger.exception("Got programming error in forward thread")
             except pyrogram.errors.exceptions.bad_request_400.MessageIdInvalid:
                 pass
             except:
