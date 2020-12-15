@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# getitem.py
+# utils.py
 # Copyright (C) 2018-2020 KunoiSayami
 #
 # This module is part of Things-Forward-telegram and is released under

@@ -7,25 +7,44 @@ auth_code =
 group_id =
 
 [forward]
+; forward only type photo message to channel_id
 to_photo =
+; forward only type video message to channel_id
 to_video =
-to_other =
+; same but forward bot message
 bot_for =
+; same but forward user specify channel
 to_anime =
-to_gif = 
-to_doc = 
-to_lowq = 
+; same but forward type gif
+to_gif =
+; same but forward type document and extension name in jpg, png, etc.
+to_doc =
+; same but forward low quality image
+to_lowq =
+; other file previous not listed
+to_other =
+
+; query command specify section
 query_photo =
 query_video =
-qeury_doc = 
+query_doc =
+
+; bypass forward channel (Deprecated)
 bypass_list = []
+; user in blacklist will not forward, but maybe forward to "to_blacklist" channel
+; (Deprecated option)
 black_list = []
-special = {}
 to_blacklist =
+
+; mapping target, forward message as specify type (Deprecated)
+special = {}
+; definition low quality image, use resolution to judgement
 lowq_resolution = 
 
-[mysql]
+[pgsql]
+host = 127.0.0.1
+port = 5432
 username =
 passwd =
+; default use public schema
 database =
-table =

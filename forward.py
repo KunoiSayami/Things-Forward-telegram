@@ -95,8 +95,8 @@ class ForwardThread:
     def get_status(cls) -> bool:
         return cls.switch
 
-    def start(self) -> None:
-        asyncio.run_coroutine_threadsafe(TracebackableCallable(self._run)(), asyncio.get_event_loop())
+    def start(self) -> concurrent.futures.Future:
+        return asyncio.run_coroutine_threadsafe(self._run(), asyncio.get_event_loop())
 
     async def _run(self) -> None:
         while self.get_status():
@@ -137,7 +137,7 @@ class SetTypingCoroutine:
         self.switch = False
 
     def start(self) -> concurrent.futures.Future:
-        return asyncio.run_coroutine_threadsafe(TracebackableCallable(self._run)(), asyncio.get_event_loop())
+        return asyncio.run_coroutine_threadsafe(self._run(), asyncio.get_event_loop())
 
     async def _run(self) -> None:
         while self.switch:
@@ -160,8 +160,8 @@ class GetHistoryCoroutine:
         self.dirty_run: bool = dirty_run
         self.start()
 
-    def start(self) -> None:
-        asyncio.run_coroutine_threadsafe(TracebackableCallable(self.run)(), asyncio.get_event_loop())
+    def start(self) -> concurrent.futures.Future:
+        return asyncio.run_coroutine_threadsafe(self.run(), asyncio.get_event_loop())
 
     async def run(self) -> None:
         checkfunc = self.checker.checkFile if not self.dirty_run else self.checker.checkFile_dirty
@@ -225,7 +225,7 @@ class GetHistoryCoroutine:
 class UnsupportedType(Exception): pass
 
 
-class BotControler:
+class BotController:
     def __init__(self, config: ConfigParser):
         self.configure = Configure.init_instance(config)
         self.app = Client(
@@ -465,7 +465,7 @@ class BotControler:
 
     @staticmethod
     def get_file_type(msg: Message) -> str:
-        s = BotControler._get_file_type(msg)
+        s = BotController._get_file_type(msg)
         if s == 'error':
             raise UnsupportedType()
         return s
@@ -679,7 +679,7 @@ def call_delete_msg(interval: int, func: Callable[[int, Union[int, Tuple[int, ..
 async def main() -> None:
     config = ConfigParser()
     config.read('config.ini')
-    bot = await BotControler.create(config)
+    bot = await BotController.create(config)
     await bot.start()
     await pyrogram.idle()
     await bot.stop()
