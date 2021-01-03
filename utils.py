@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # utils.py
-# Copyright (C) 2018-2020 KunoiSayami
+# Copyright (C) 2018-2021 KunoiSayami
 #
 # This module is part of Things-Forward-telegram and is released under
 # the AGPL v3 License: https://www.gnu.org/licenses/agpl-3.0.txt

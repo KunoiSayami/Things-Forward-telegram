@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 # forward.py
-# Copyright (C) 2018-2020 KunoiSayami
+# Copyright (C) 2018-2021 KunoiSayami
 #
 # This module is part of Things-Forward-telegram and is released under
 # the AGPL v3 License: https://www.gnu.org/licenses/agpl-3.0.txt
@@ -178,14 +178,14 @@ class GetHistoryCoroutine:
         while self.offset_id > 1:
             for x in list(msg_group.messages):
                 if x.photo:
-                    if not await checkfunc(x.photo.sizes[-1].file_id): continue
+                    if not await checkfunc(x.photo.sizes[-1].file_unique_id): continue
                     photos.append((is_bot(x), {'chat': {'id': self.target_id}, 'message_id': x['message_id']}))
                 elif x.video:
-                    if not await checkfunc(x.video.file_id): continue
+                    if not await checkfunc(x.video.file_unique_id): continue
                     videos.append((is_bot(x), {'chat': {'id': self.target_id}, 'message_id': x['message_id']}))
                 elif x.document:
                     if '/' in x.document.mime_type and x.document.mime_type.split('/')[0] in ('image', 'video') and \
-                            not await checkfunc(x.document.file_id):
+                            not await checkfunc(x.document.file_unique_id):
                         continue
                     docs.append((is_bot(x), {'chat': {'id': self.target_id}, 'message_id': x['message_id']}))
             try:
@@ -226,19 +226,19 @@ class UnsupportedType(Exception): pass
 
 
 class BotController:
-    def __init__(self, config: ConfigParser):
+    def __init__(self, config: ConfigParser, redis_: aioredis.Redis, checker: CheckFile, forward_thread: ForwardThread):
         self.configure = Configure.init_instance(config)
         self.app = Client(
             'forward',
             config.get('account', 'api_id'),
             config.get('account', 'api_hash')
         )
-        self.checker: CheckFile = None  # type: ignore
+        self.checker: CheckFile = checker
 
-        self.redis: aioredis.Redis = None
+        self.redis: aioredis.Redis = redis_
         self.redis_prefix: str = ''.join(random.choices(string.ascii_lowercase, k=5))
 
-        self.ForwardThread: ForwardThread = None  # type: ignore
+        self.ForwardThread: ForwardThread = forward_thread
 
         self.min_resolution: int = config.getint('forward', 'lowq_resolution', fallback=120)
         self.owner_group_id: int = config.getint('account', 'group_id', fallback=-1)
@@ -246,9 +246,9 @@ class BotController:
         self.echo_switch: bool = False
         self.detail_msg_switch: bool = False
         # self.delete_blocked_message_after_blacklist: bool = False
-        self.func_blacklist: Callable[[], int] = None  # type: ignore
+        self.func_blacklist: Optional[Callable[[], int]] = None
         if self.configure.blacklist:
-            self.func_blacklist = ForwardThread.put_blacklist  # type: ignore
+            self.func_blacklist = ForwardThread.put_blacklist
         self.custom_switch: bool = False
 
         self.init_handle()
@@ -257,12 +257,12 @@ class BotController:
 
     @classmethod
     async def create(cls, config: ConfigParser):
-        self = cls(config)
-        self.checker = await CheckFile.init_instance(config.get('pgsql', 'host'), config.getint('pgsql', 'port'),
-                                                     config.get('pgsql', 'username'),
-                                                     config.get('pgsql', 'passwd'), config.get('pgsql', 'database'))
-        self.redis = await aioredis.create_redis_pool('redis://localhost')
-        self.ForwardThread = ForwardThread()
+        redis_ = await aioredis.create_redis_pool('redis://localhost')
+        checker = await CheckFile.init_instance(config.get('pgsql', 'host'), config.getint('pgsql', 'port'),
+                                                config.get('pgsql', 'username'),
+                                                config.get('pgsql', 'passwd'), config.get('pgsql', 'database'))
+        forward_thread = ForwardThread()
+        self = cls(config, redis_, checker, forward_thread)
         await self.redis.sadd(f'{self.redis_prefix}for_bypass', *await self.checker.query_all_bypass())
         await self.redis.sadd(f'{self.redis_prefix}for_blacklist', *await self.checker.query_all_blacklist())
         await self.redis.mset(await self.checker.query_all_special_forward())
@@ -281,20 +281,32 @@ class BotController:
     def init_handle(self) -> None:
         self.app.add_handler(
             MessageHandler(self.get_msg_from_owner_group, filters.chat(self.owner_group_id) & filters.reply))
-        self.app.add_handler(MessageHandler(self.get_command_from_target, filters.chat(
-            self.configure.predefined_group_list) & filters.text & filters.reply))
-        self.app.add_handler(MessageHandler(self.pre_check,
-                                            filters.media & ~filters.private & ~filters.sticker & ~filters.voice & ~filters.web_page))
+        self.app.add_handler(
+            MessageHandler(
+                self.get_command_from_target,
+                filters.chat(self.configure.predefined_group_list) & filters.text & filters.reply)
+        )
+        self.app.add_handler(
+            MessageHandler(
+                self.pre_check,
+                filters.media & ~filters.private & ~filters.sticker & ~filters.voice & ~filters.web_page)
+        )
         self.app.add_handler(MessageHandler(self.handle_photo, filters.photo & ~filters.private & ~filters.chat(
             [self.configure.photo, self.configure.lowq])))
         self.app.add_handler(
             MessageHandler(self.handle_video, filters.video & ~filters.private & ~filters.chat(self.configure.video)))
         self.app.add_handler(
             MessageHandler(self.handle_gif, filters.animation & ~filters.private & ~filters.chat(self.configure.gif)))
-        self.app.add_handler(MessageHandler(self.handle_document,
-                                            filters.document & ~filters.private & ~filters.chat(self.configure.doc)))
-        self.app.add_handler(MessageHandler(self.handle_other,
-                                            filters.media & ~filters.private & ~filters.sticker & ~filters.voice & ~filters.web_page))
+        self.app.add_handler(
+            MessageHandler(
+                self.handle_document,
+                filters.document & ~filters.private & ~filters.chat(self.configure.doc))
+        )
+        self.app.add_handler(
+            MessageHandler(
+                self.handle_other,
+                filters.media & ~filters.private & ~filters.sticker & ~filters.voice & ~filters.web_page)
+        )
         self.app.add_handler(MessageHandler(self.pre_private, filters.private))
         self.app.add_handler(MessageHandler(self.handle_add_bypass, filters.command('e') & filters.private))
         self.app.add_handler(MessageHandler(self.process_query, filters.command('q') & filters.private))
@@ -365,7 +377,8 @@ class BotController:
                 if r and msg.reply_to_message.from_user.id != msg.chat.id:
                     pending_del = int(r.group(1))
             else:
-                group_id = msg.forward_from.id if msg.forward_from else msg.forward_from_chat.id if msg.forward_from_chat else None
+                group_id = msg.forward_from.id if msg.forward_from else \
+                    msg.forward_from_chat.id if msg.forward_from_chat else None
                 if group_id and await self.redis.sismember(f'{self.redis_prefix}for_blacklist', group_id):
                     pending_del = group_id
             if pending_del is not None:
@@ -460,8 +473,8 @@ class BotController:
                     await self.del_message_by_id(client, msg, self.owner_group_id, msg.text[-1] == 'f')
 
     @staticmethod
-    def get_file_id(msg: Message, _type: str) -> str:
-        return getattr(msg, _type).file_id
+    def get_file_unique_id(msg: Message, _type: str) -> str:
+        return getattr(msg, _type).file_unique_id
 
     @staticmethod
     def get_file_type(msg: Message) -> str:
@@ -484,7 +497,7 @@ class BotController:
     async def pre_check(self, _client: Client, msg: Message) -> None:
         try:
             if await self.redis.sismember(f'{self.redis_prefix}for_bypass', msg.chat.id) or \
-                    not await self.checker.checkFile(self.get_file_id(msg, self.get_file_type(msg))):
+                    not await self.checker.checkFile(self.get_file_unique_id(msg, self.get_file_type(msg))):
                 return
         except UnsupportedType:
             pass
@@ -493,9 +506,11 @@ class BotController:
 
     async def blacklist_checker(self, msg: Message) -> None:
         return await self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.chat.id) or \
-               (msg.from_user and await self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.from_user.id)) or \
-               (msg.forward_from and await self.redis.sismember(f'{self.redis_prefix}for_blacklist',
-                                                                msg.forward_from.id)) or \
+               (msg.from_user and await self.redis.sismember(
+                   f'{self.redis_prefix}for_blacklist', msg.from_user.id)) or \
+               (msg.forward_from and await self.redis.sismember(
+                   f'{self.redis_prefix}for_blacklist',
+                   msg.forward_from.id)) or \
                (msg.forward_from_chat and await self.redis.sismember(f'{self.redis_prefix}for_blacklist',
                                                                      msg.forward_from_chat.id))
 
