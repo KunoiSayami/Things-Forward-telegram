@@ -1,5 +1,7 @@
 # Message-Forwarding Bot
 
+## DUE TO MY ACCOUNT GOT TELEGRAM BANNED, THIS PROJECT IS NO LONGER MAINTENANCE
+
 Automatically forward the target message
 
 ## Note
