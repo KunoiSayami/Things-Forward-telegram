@@ -17,6 +17,7 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
+from __future__ import annotations
 from configparser import ConfigParser
 from typing import List, Optional
 
@@ -96,16 +97,16 @@ class Configure:
         return self._authorized_code
 
     @property
-    def predefined_group_list(self) -> List[int]:
+    def predefined_group_list(self) -> list[int]:
         return [self.photo, self.video, self.other, self.anime, self.doc, self.gif, self.lowq, self.bot_for]
 
     _instance = None
 
     @classmethod
-    def get_instance(cls) -> 'Configure':
+    def get_instance(cls) -> Configure:
         return cls._instance  # type: ignore
 
     @classmethod
-    def init_instance(cls, config: ConfigParser) -> 'Configure':
+    def init_instance(cls, config: ConfigParser) -> Configure:
         cls._instance = cls(config)
         return cls._instance
