@@ -1,5 +1,4 @@
-cryptography~=3.4.8
-aiofiles~=0.7.0
-asyncpg~=0.24.0
-Pyrogram~=1.2.9
+aiofiles~=0.8.0
+asyncpg~=0.25.0
+Pyrogram~=1.2.20
 aioredis~=2.0.0
