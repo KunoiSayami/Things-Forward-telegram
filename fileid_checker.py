@@ -30,14 +30,14 @@ from libpy3.aiopgsqldb import PgSQLdb
 class CheckFile(PgSQLdb):
     min_resolution = 120
 
-    async def check(self, sql: str, exec_sql: str, args=()) -> bool:
+    async def check(self, sql: str, exec_sql: str, *args) -> bool:
         try:
             if await self.query1(sql, args) is None:
                 await self.execute(exec_sql, args)
                 return True
             else:
                 return False
-        except:
+        except asyncpg.PostgresError:
             return False
 
     async def check_file(self, file_id: str) -> bool:

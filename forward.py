@@ -1,10 +1,7 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # forward.py
 # Copyright (C) 2018-2021 KunoiSayami
-#
-# This module is part of Things-Forward-telegram and is released under
-# the AGPL v3 License: https://www.gnu.org/licenses/agpl-3.0.txt
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by
@@ -25,12 +22,14 @@ import logging
 import os
 import random
 import re
+import signal
 import string
 from configparser import ConfigParser
 from dataclasses import dataclass
-from typing import Callable, Coroutine, Optional, Union
+from typing import Callable, Coroutine
 
 import aioredis
+import asyncpg
 import pyrogram.errors
 from pyrogram import Client, filters, raw, ContinuePropagation
 from pyrogram.handlers import MessageHandler
@@ -68,7 +67,7 @@ class ForwardThread:
         `Loginfo` structure: (need_log: bool, log_msg: str, args: tulpe)
     '''
 
-    def __init__(self):
+    def __init__(self, redis_prefix: str, redis_conn: aioredis.Redis):
         self.checker: CheckFile = CheckFile.get_instance()
         self.configure: Configure = Configure.get_instance()
         self.logger: logging.Logger = logging.getLogger('fwd_thread')
@@ -77,6 +76,8 @@ class ForwardThread:
         self.logger.setLevel(logging.INFO)
         self.logger.addHandler(log_file_header)
         self.logger.propagate = False
+        self.redis = redis_conn
+        self.redis_prefix = redis_prefix
 
     @classmethod
     def put_blacklist(cls, request: BlackListForwardRequest) -> None:
@@ -117,8 +118,10 @@ class ForwardThread:
                     self.logger.info(request.log.fmt_log, *request.log.fmt_args)
             except pyrogram.errors.exceptions.bad_request_400.MessageIdInvalid:
                 pass
-            except:
-                if request.msg and request.target_id != self.configure.blacklist:
+            except pyrogram.errors.BadRequest as e:
+                print(e.x, e.NAME, e.ID, e.CODE)
+            except pyrogram.errors.RPCError:
+                if request.msg and await self.redis.sismember(f'{self.redis_prefix}for_blacklist', request.target_id):
                     print(repr(request.msg))
                 # self.put(target_id, chat_id, msg_id, request.log, msg_raw)
                 logger.exception('Got other exceptions in forward thread')
@@ -148,7 +151,7 @@ class SetTypingCoroutine:
 
 class GetHistoryCoroutine:
 
-    def __init__(self, client: Client, chat_id: int, target_id: Union[int, str], offset_id: int = 0,
+    def __init__(self, client: Client, chat_id: int, target_id: int | str, offset_id: int = 0,
                  dirty_run: bool = False):
         self.checker: CheckFile = CheckFile.get_instance()
         self.configure: Configure = Configure.get_instance()
@@ -163,13 +166,13 @@ class GetHistoryCoroutine:
         return asyncio.run_coroutine_threadsafe(self.run(), asyncio.get_event_loop())
 
     async def run(self) -> None:
-        checkfunc = self.checker.check_file if not self.dirty_run else self.checker.check_file_dirty
+        check_func = self.checker.check_file if not self.dirty_run else self.checker.check_file_dirty
         photos, videos, docs = [], [], []
         msg_group = await self.client.get_history(self.target_id, offset_id=self.offset_id)
         await self.client.send_message(
             self.chat_id,
             'Now process query {}, total {} messages{}'.format(
-                self.target_id,msg_group[0]['message_id'],
+                self.target_id, msg_group[0]['message_id'],
                 ' (Dirty mode)' if self.dirty_run else '')
         )
         status_thread = SetTypingCoroutine(self.client, self.chat_id)
@@ -177,14 +180,16 @@ class GetHistoryCoroutine:
         while self.offset_id > 1:
             for x in list(msg_group):
                 if x.photo:
-                    if not await checkfunc(x.photo.sizes[-1].file_unique_id): continue
+                    if not await check_func(x.photo.file_unique_id):
+                        continue
                     photos.append((is_bot(x), {'chat': {'id': self.target_id}, 'message_id': x['message_id']}))
                 elif x.video:
-                    if not await checkfunc(x.video.file_unique_id): continue
+                    if not await check_func(x.video.file_unique_id):
+                        continue
                     videos.append((is_bot(x), {'chat': {'id': self.target_id}, 'message_id': x['message_id']}))
                 elif x.document:
                     if '/' in x.document.mime_type and x.document.mime_type.split('/')[0] in ('image', 'video') and \
-                            not await checkfunc(x.document.file_unique_id):
+                            not await check_func(x.document.file_unique_id):
                         continue
                     docs.append((is_bot(x), {'chat': {'id': self.target_id}, 'message_id': x['message_id']}))
             try:
@@ -221,11 +226,13 @@ class GetHistoryCoroutine:
         del photos, videos, docs
 
 
-class UnsupportedType(Exception): pass
+class UnsupportedType(Exception):
+    pass
 
 
 class BotController:
-    def __init__(self, config: ConfigParser, redis_: aioredis.Redis, checker: CheckFile, forward_thread: ForwardThread):
+    def __init__(self, config: ConfigParser, redis_: aioredis.Redis, checker: CheckFile, forward_thread: ForwardThread,
+                 redis_prefix: str):
         self.configure = Configure.init_instance(config)
         self.app = Client(
             'forward',
@@ -235,7 +242,7 @@ class BotController:
         self.checker: CheckFile = checker
 
         self.redis: aioredis.Redis = redis_
-        self.redis_prefix: str = ''.join(random.choices(string.ascii_lowercase, k=5))
+        self.redis_prefix: str = redis_prefix
 
         self.ForwardThread: ForwardThread = forward_thread
 
@@ -245,28 +252,35 @@ class BotController:
         self.echo_switch: bool = False
         self.detail_msg_switch: bool = False
         # self.delete_blocked_message_after_blacklist: bool = False
-        self.func_blacklist: Optional[Callable[[], int]] = None
+        self.func_blacklist: Callable[[], int] | None = None
         if self.configure.blacklist:
             self.func_blacklist = ForwardThread.put_blacklist
         self.custom_switch: bool = False
 
         self.init_handle()
 
+        self.future: concurrent.futures.Future | None = None
+
         self.plugins: list[PluginLoader] = []
 
     @classmethod
     async def create(cls, config: ConfigParser):
         redis_ = await aioredis.from_url('redis://localhost')
-        checker = await CheckFile.init_instance(config.get('pgsql', 'host'), config.getint('pgsql', 'port'),
-                                                config.get('pgsql', 'username'),
-                                                config.get('pgsql', 'passwd'), config.get('pgsql', 'database'))
-        forward_thread = ForwardThread()
-        self = cls(config, redis_, checker, forward_thread)
-        await self.redis.sadd(f'{self.redis_prefix}for_bypass', *await self.checker.query_all_bypass())
-        await self.redis.sadd(f'{self.redis_prefix}for_blacklist', *await self.checker.query_all_blacklist())
-        await self.redis.mset(await self.checker.query_all_special_forward())
-        await self.redis.sadd(f'{self.redis_prefix}for_admin', *await self.checker.query_all_admin())
-        await self.redis.sadd(f'{self.redis_prefix}for_admin', config.getint('account', 'owner'))
+        prefix = ''.join(random.choices(string.ascii_lowercase, k=5))
+        checker = await CheckFile.init_instance(
+            config.get('pgsql', 'host'),
+            config.getint('pgsql', 'port'),
+            config.get('pgsql', 'username'),
+            config.get('pgsql', 'passwd'),
+            config.get('pgsql', 'database')
+        )
+        forward_thread = ForwardThread(prefix, redis_)
+        self = cls(config, redis_, checker, forward_thread, prefix)
+        await redis_.sadd(f'{self.redis_prefix}for_bypass', *await self.checker.query_all_bypass())
+        await redis_.sadd(f'{self.redis_prefix}for_blacklist', *await self.checker.query_all_blacklist())
+        await redis_.mset(await self.checker.query_all_special_forward())
+        await redis_.sadd(f'{self.redis_prefix}for_admin', *await self.checker.query_all_admin())
+        await redis_.sadd(f'{self.redis_prefix}for_admin', config.getint('account', 'owner'))
         await self.load_plugins(config)
         return self
 
@@ -303,6 +317,12 @@ class BotController:
         )
         self.app.add_handler(
             MessageHandler(
+                self.do_nothing,
+                filters.contact
+            )
+        )
+        self.app.add_handler(
+            MessageHandler(
                 self.handle_other,
                 filters.media & ~filters.private & ~filters.sticker & ~filters.voice & ~filters.web_page)
         )
@@ -321,6 +341,9 @@ class BotController:
         self.app.add_handler(MessageHandler(self.switch_detail, filters.command('sd') & filters.private))
         self.app.add_handler(MessageHandler(self.show_help_message, filters.command('help') & filters.private))
         self.app.add_handler(MessageHandler(self.process_private, filters.private))
+
+    async def do_nothing(self, _client: Client, _msg: Message) -> None:
+        pass
 
     async def load_plugins(self, config: ConfigParser) -> None:
         try:
@@ -390,7 +413,7 @@ class BotController:
                 print(msg.reply_to_message.text)
             logger.exception('Catch!')
 
-    async def add_black_list(self, user_id: Union[int, dict], post_back_id=None) -> None:
+    async def add_black_list(self, user_id: int | dict, post_back_id=None) -> None:
         if isinstance(user_id, dict):
             await self.app.send_message(self.owner_group_id, f'User id:`{user_id["from_user"]}`\nFrom '
                                                              f'chat id:`{user_id["from_chat"]}`\nForward '
@@ -406,15 +429,15 @@ class BotController:
             await self.app.send_message(post_back_id, f'Add `{user_id}` to blacklist', 'markdown')
 
     async def del_message_by_id(self, client: Client, msg: Message,
-                                send_message_to: Optional[Union[int, str]] = None,
+                                send_message_to: int | str | None = None,
                                 forward_control: bool = True) -> None:
         if forward_control and self.configure.blacklist == '':
             logger.error('Request forward but blacklist channel not specified')
             return
         id_from_reply = get_forward_id(msg.reply_to_message)
-        q = await self.checker.query('''SELECT * FROM "msg_detail" 
-        WHERE ("from_chat" = $1 OR "from_user" = $2 OR "from_forward" = $3) 
-        AND "to_chat" != $4''',
+        q = await self.checker.query('''SELECT * FROM "msg_detail"
+         WHERE ("from_chat" = $1 OR "from_user" = $2 OR "forward_from" = $3)
+         AND "to_chat" != $4''',
                                      (id_from_reply, id_from_reply, id_from_reply,
                                       self.configure.blacklist))  # type: ignore
 
@@ -424,10 +447,10 @@ class BotController:
             for x in q:
                 try:
                     await client.delete_messages(x['to_chat'], x['to_msg'])
-                except:
+                except pyrogram.errors.RPCError:
                     pass
             await self.checker.execute('''DELETE FROM "msg_detail" 
-            WHERE ("from_chat" = $1 OR "from_user" = $2 OR "from_forward" = $3) 
+            WHERE ("from_chat" = $1 OR "from_user" = $2 OR "forward_from" = $3) 
             AND "to_chat" != $4''', (
                 id_from_reply, id_from_reply, id_from_reply,
                 self.configure.blacklist))  # type: ignore
@@ -436,7 +459,7 @@ class BotController:
             for x in q:
                 try:
                     await client.delete_messages(x['to_chat'], x['to_msg'])
-                except:
+                except pyrogram.errors.RPCError:
                     pass
             await msg.reply(f'Delete all message from `{id_from_reply}` completed.', False, 'markdown')
 
@@ -444,7 +467,7 @@ class BotController:
         try:
             if msg.text and msg.text == '/undo':
                 await self.reply_checker_and_del_from_blacklist(client, msg)
-        except:
+        except pyrogram.errors.RPCError:
             logger.exception('Exception occurred on `get_msg_from_owner_group()\'')
 
     async def get_command_from_target(self, client: Client, msg: Message) -> None:
@@ -616,7 +639,7 @@ class BotController:
         await self._set_forward_target(int(r.group(1)), r.group(2), msg)
 
     async def _set_forward_target(self, chat_id: int, target: str, msg: Message) -> None:
-        await self.redis.set(chat_id, target)
+        await self.redis.set(str(chat_id), target)
         await self.checker.update_forward_target(chat_id, target)
         await msg.reply(f'Set group `{chat_id}` forward to `{target}`', parse_mode='markdown')
 
@@ -664,35 +687,71 @@ class BotController:
                         msg.photo.width * msg.photo.height) * 1000) if msg.photo else ''), parse_mode='markdown')
         if self.echo_switch:
             await msg.reply('forward_from = `{}`'.format(get_forward_id(msg, -1)), parse_mode='markdown')
-            if self.detail_msg_switch: print(msg)
-        if msg.text is None: return
+            if self.detail_msg_switch:
+                print(msg)
+        if msg.text is None:
+            return
         r = re.match(r'^Add (-?\d+) to blacklist$', msg.text)
-        if r is None: return
+        if r is None:
+            return
         await self.add_black_list(int(r.group(1)), msg.chat.id)
 
     async def start(self) -> None:
         await self.app.start()
-        self.ForwardThread.start()
+        self.future = self.ForwardThread.start()
         await self.start_plugins()
 
-    @staticmethod
-    async def idle() -> None:
-        await pyrogram.idle()
+    async def idle(self) -> None:
+        _idle = asyncio.Event()
+
+        def _reset_idle(*_args):
+            _idle.set()
+
+        for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            signal.signal(sig, _reset_idle)
+
+        while not _idle.is_set():
+            try:
+                if (e := self.future.exception(0)) is not None:
+                    raise e
+            except (pyrogram.errors.RPCError, asyncpg.PostgresError):
+                logger.exception('Got Telegram or database exception, raising')
+                raise
+            except (concurrent.futures.CancelledError, concurrent.futures.TimeoutError):
+                pass
+            if _idle.is_set():
+                break
+            await asyncio.sleep(1)
 
     async def stop(self) -> None:
         logger.info('Calling clean up function')
         ForwardThread.switch = False
+        await asyncio.sleep(1)
         await self.pending_stop_plugins()
-        if not ForwardThread.queue.empty():
-            await asyncio.sleep(0.5)
-        await self.app.stop()
-        await self.stop_plugins()
-        await self.clean()
-        await asyncio.gather(self.checker.close(), self.redis.close())
+        try:
+            if self.future.running():
+                logger.warning('Future is still running, Wait more time until it finished')
+                for _ in range(3):
+                    if self.future.running():
+                        await asyncio.sleep(1.5)
+                    else:
+                        break
+                if self.future.running():
+                    logger.error('Future in still running after period of time, cancel it.')
+                    self.future.cancel()
+                try:
+                    self.future.result(0)
+                except (concurrent.futures.CancelledError, concurrent.futures.TimeoutError):
+                    pass
+        finally:
+            await self.app.stop()
+            await self.stop_plugins()
+            await self.clean()
+            await asyncio.gather(self.checker.close(), self.redis.close())
 
 
-def call_delete_msg(interval: int, func: Callable[[int, Union[int, tuple[int, ...]]], Coroutine[None, None, bool]],
-                    target_id: int, msg_: Union[int, tuple[int, ...]]) -> None:
+def call_delete_msg(interval: int, func: Callable[[int, int | tuple[int, ...]], Coroutine[None, None, bool]],
+                    target_id: int, msg_: int | tuple[int, ...]) -> None:
     asyncio.get_event_loop().call_later(interval, func, target_id, msg_)
 
 
@@ -701,8 +760,10 @@ async def main() -> None:
     config.read('config.ini')
     bot = await BotController.create(config)
     await bot.start()
-    await pyrogram.idle()
-    await bot.stop()
+    try:
+        await bot.idle()
+    finally:
+        await bot.stop()
 
 
 if __name__ == '__main__':
@@ -715,5 +776,5 @@ if __name__ == '__main__':
         logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - '
                                                         '%(name)s - %(funcName)s - %(lineno)d - %(message)s')
     logging.getLogger('pyrogram').setLevel(logging.WARNING)
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
+    asyncio.run(main())

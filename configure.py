@@ -18,6 +18,8 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 from __future__ import annotations
+
+import warnings
 from configparser import ConfigParser
 from typing import List, Optional
 
@@ -74,6 +76,10 @@ class Configure:
 
     @property
     def blacklist(self) -> Optional[int]:
+        warnings.warn(
+            'This option is deprecated',
+            DeprecationWarning
+        )
         return self._to_blacklist
 
     @property
