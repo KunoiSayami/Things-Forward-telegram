@@ -20,6 +20,7 @@ import concurrent.futures
 import importlib
 import logging
 import os
+import pathlib
 import random
 import re
 import signal
@@ -36,7 +37,7 @@ from pyrogram.handlers import MessageHandler
 from pyrogram.types import Message
 
 from configure import Configure
-from fileid_checker import CheckFile
+from helper import CheckFile
 from utils import (BlackListForwardRequest, ForwardRequest, LogStruct,
                    PluginLoader, get_forward_id, get_msg_from, is_bot)
 
@@ -111,15 +112,25 @@ class ForwardThread:
                     return
             try:
                 r = await request.msg.forward(request.target_id, True)
-                await self.checker.insert_log(r.chat.id, r.message_id, request.msg.chat.id,
-                                              request.msg.message_id, get_msg_from(request.msg),
-                                              get_forward_id(request.msg, -1))  # type: ignore
+                await self.checker.insert_log(
+                    r.chat.id,
+                    r.message_id,
+                    request.msg.chat.id,
+                    request.msg.message_id,
+                    get_msg_from(request.msg),
+                    get_forward_id(request.msg, -1)
+                )
                 if request.log.need_log:
                     self.logger.info(request.log.fmt_log, *request.log.fmt_args)
             except pyrogram.errors.exceptions.bad_request_400.MessageIdInvalid:
                 pass
             except pyrogram.errors.BadRequest as e:
-                print(e.x, e.NAME, e.ID, e.CODE)
+                if 'CHAT_FORWARDS_RESTRICTED' in e.x:
+                    await asyncio.gather(
+                        self.checker.insert_bypass(request.msg.chat.id),
+                        self.redis.sadd(f'{self.redis_prefix}for_bypass', request.msg.chat.id)
+                    )
+                    logger.error('Got forward restricted group: %d, add to skip list', request.msg.chat.id)
             except pyrogram.errors.RPCError:
                 if request.msg and await self.redis.sismember(f'{self.redis_prefix}for_blacklist', request.target_id):
                     print(repr(request.msg))
@@ -253,8 +264,6 @@ class BotController:
         self.detail_msg_switch: bool = False
         # self.delete_blocked_message_after_blacklist: bool = False
         self.func_blacklist: Callable[[], int] | None = None
-        if self.configure.blacklist:
-            self.func_blacklist = ForwardThread.put_blacklist
         self.custom_switch: bool = False
 
         self.init_handle()
@@ -562,9 +571,15 @@ class BotController:
             forward_target = getattr(self.configure, spec_target.decode())
         elif is_bot(msg):
             forward_target = self.configure.bot
-        self.ForwardThread.put(ForwardRequest(forward_target, msg,
-                                              LogStruct(True, 'forward %s from %s (id: %d)', what,
-                                                        msg.chat.title, msg.chat.id)))
+        self.ForwardThread.put(
+            ForwardRequest(
+                forward_target, msg,
+                LogStruct(
+                    True, 'forward %s from %s (id: %d)', what,
+                    msg.chat.title, msg.chat.id
+                )
+            )
+        )
 
     async def handle_photo(self, _client: Client, msg: Message) -> None:
         await self.forward_msg(msg,

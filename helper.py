@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# fileid_checker.py
+# helper.py
 # Copyright (C) 2020 KunoiSayami
 #
 # This module is part of Things-Forward-telegram and is released under
@@ -18,6 +18,8 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 from __future__ import annotations
+
+import logging
 from collections.abc import Iterable
 from typing import Optional, Sequence, Union
 
@@ -26,18 +28,22 @@ from pyrogram.types import Photo
 
 from libpy3.aiopgsqldb import PgSQLdb
 
+logger = logging.getLogger('forwarder.pgsql')
+logger.setLevel(logging.DEBUG)
+
 
 class CheckFile(PgSQLdb):
     min_resolution = 120
 
     async def check(self, sql: str, exec_sql: str, *args) -> bool:
         try:
-            if await self.query1(sql, args) is None:
-                await self.execute(exec_sql, args)
+            if await self.query1(sql, *args) is None:
+                await self.execute(exec_sql, *args)
                 return True
             else:
                 return False
         except asyncpg.PostgresError:
+            logger.exception('Got postgresql exception error')
             return False
 
     async def check_file(self, file_id: str) -> bool:
@@ -47,10 +53,10 @@ class CheckFile(PgSQLdb):
     async def check_file_dirty(self, file_id: str) -> bool:
         return await self.query1('''SELECT "id" FROM "file_id" WHERE "id" = $1''', file_id) is None
 
-    async def insert_log(self, *args: tuple[tuple[str, ...], ...]) -> None:
+    async def insert_log(self, *args) -> None:
         await self.execute('''INSERT INTO "msg_detail" 
         ("to_chat", "to_msg", "from_chat", "from_id", "from_user", "forward_from") 
-        VALUES ($1, $2, $3, $4, $5, $6)''', *args)  # type: ignore
+        VALUES ($1, $2, $3, $4, $5, $6)''', *args)
 
     @staticmethod
     def check_photo(photo: Photo) -> bool:

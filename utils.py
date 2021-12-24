@@ -25,7 +25,7 @@ from pyrogram import Client
 from pyrogram.types import Message
 
 from configure import ConfigParser
-from fileid_checker import CheckFile
+from helper import CheckFile
 
 T = TypeVar('T')
 
