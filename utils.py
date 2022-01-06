@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
 # utils.py
-# Copyright (C) 2018-2021 KunoiSayami
-#
-# This module is part of Things-Forward-telegram and is released under
-# the AGPL v3 License: https://www.gnu.org/licenses/agpl-3.0.txt
+# Copyright (C) 2018-2022 KunoiSayami
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by
@@ -17,9 +14,9 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
-import traceback
+from __future__ import annotations
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Dict, List, TypeVar, Union
+from typing import TypeVar
 
 from pyrogram import Client
 from pyrogram.types import Message
@@ -33,13 +30,15 @@ T = TypeVar('T')
 def get_msg_key(msg: Message, key1: str, key2: str, fallback: T = None) -> T:
     try:
         return msg[key1][key2]
-    except:
+    except (AttributeError, ValueError):
         return fallback
 
 
-def get_forward_id(msg: Message, fallback: T = None) -> Union[T, int]:
-    if msg.forward_from_chat: return msg.forward_from_chat.id
-    if msg.forward_from: return msg.forward_from.id
+def get_forward_id(msg: Message, fallback: T = None) -> T | int:
+    if msg.forward_from_chat:
+        return msg.forward_from_chat.id
+    if msg.forward_from:
+        return msg.forward_from.id
     return fallback
 
 
@@ -67,7 +66,8 @@ class BasicForwardRequest:
         self.log = log
 
 
-class BlackListForwardRequest(BasicForwardRequest): pass
+class BlackListForwardRequest(BasicForwardRequest):
+    pass
 
 
 class ForwardRequest(BasicForwardRequest):
@@ -84,7 +84,7 @@ class ForwardRequest(BasicForwardRequest):
 class Plugin:
 
     @classmethod
-    async def create_plugin(cls, *_args) -> 'Plugin':
+    async def create_plugin(cls, *_args) -> Plugin:
         self = cls()
         return self
 
@@ -102,7 +102,7 @@ class Plugin:
 
 
 class _PluginModule:
-    requirement: Dict[str, bool]
+    requirement: dict[str, bool]
 
 
 @dataclass
@@ -115,8 +115,8 @@ class PluginLoader:
 
     def __init__(self, module: _PluginModule, module_name: str, client: Client, config: ConfigParser,
                  database: CheckFile):
-        self.requirement: Dict[str, bool] = module.requirement
-        self.args: List[T] = [client]
+        self.requirement: dict[str, bool] = module.requirement
+        self.args: list[T] = [client]
         _requirement = _Requirement(self.requirement.get('config'), self.requirement.get('database'))  # type: ignore
         if _requirement.config:
             self.args.append(config)
@@ -130,19 +130,6 @@ class PluginLoader:
         await self.create_instance()
         return self.instance
 
-    async def create_instance(self) -> 'PluginLoader':
+    async def create_instance(self) -> PluginLoader:
         self.instance = await getattr(self.module, self.module_name).create_plugin(*self.args)
         return self
-
-
-@dataclass
-class TracebackableCallable:
-    callback: Callable[[], Awaitable[T]]
-
-    async def __call__(self) -> None:
-        try:
-            await self.callback()
-        except GeneratorExit:
-            pass
-        except:
-            traceback.print_exc()

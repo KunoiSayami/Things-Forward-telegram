@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # forward.py
-# Copyright (C) 2018-2021 KunoiSayami
+# Copyright (C) 2018-2022 KunoiSayami
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by
@@ -20,16 +20,13 @@ import concurrent.futures
 import importlib
 import logging
 import os
-import pathlib
-import random
 import re
 import signal
-import string
 from configparser import ConfigParser
 from dataclasses import dataclass
 from typing import Callable, Coroutine
 
-import aioredis
+import aioredis.exceptions
 import asyncpg
 import pyrogram.errors
 from pyrogram import Client, filters, raw, ContinuePropagation
@@ -37,7 +34,7 @@ from pyrogram.handlers import MessageHandler
 from pyrogram.types import Message
 
 from configure import Configure
-from helper import CheckFile
+from helper import CheckFile, ClientRedisHelper
 from utils import (BlackListForwardRequest, ForwardRequest, LogStruct,
                    PluginLoader, get_forward_id, get_msg_from, is_bot)
 
@@ -68,7 +65,7 @@ class ForwardThread:
         `Loginfo` structure: (need_log: bool, log_msg: str, args: tulpe)
     '''
 
-    def __init__(self, redis_prefix: str, redis_conn: aioredis.Redis):
+    def __init__(self, redis_conn: ClientRedisHelper):
         self.checker: CheckFile = CheckFile.get_instance()
         self.configure: Configure = Configure.get_instance()
         self.logger: logging.Logger = logging.getLogger('fwd_thread')
@@ -78,11 +75,6 @@ class ForwardThread:
         self.logger.addHandler(log_file_header)
         self.logger.propagate = False
         self.redis = redis_conn
-        self.redis_prefix = redis_prefix
-
-    @classmethod
-    def put_blacklist(cls, request: BlackListForwardRequest) -> None:
-        cls.put(ForwardRequest.from_super(Configure.get_instance().blacklist, request))  # type: ignore
 
     @classmethod
     def put(cls, request: ForwardRequest) -> None:
@@ -128,11 +120,11 @@ class ForwardThread:
                 if 'CHAT_FORWARDS_RESTRICTED' in e.x:
                     await asyncio.gather(
                         self.checker.insert_bypass(request.msg.chat.id),
-                        self.redis.sadd(f'{self.redis_prefix}for_bypass', request.msg.chat.id)
+                        self.redis.add_bypass(request.msg.chat.id)
                     )
                     logger.error('Got forward restricted group: %d, add to skip list', request.msg.chat.id)
             except pyrogram.errors.RPCError:
-                if request.msg and await self.redis.sismember(f'{self.redis_prefix}for_blacklist', request.target_id):
+                if request.msg and await self.redis.query_blacklist(request.target_id):
                     print(repr(request.msg))
                 # self.put(target_id, chat_id, msg_id, request.log, msg_raw)
                 logger.exception('Got other exceptions in forward thread')
@@ -242,8 +234,8 @@ class UnsupportedType(Exception):
 
 
 class BotController:
-    def __init__(self, config: ConfigParser, redis_: aioredis.Redis, checker: CheckFile, forward_thread: ForwardThread,
-                 redis_prefix: str):
+    def __init__(self, config: ConfigParser, redis_: ClientRedisHelper,
+                 checker: CheckFile, forward_thread: ForwardThread):
         self.configure = Configure.init_instance(config)
         self.app = Client(
             'forward',
@@ -252,8 +244,7 @@ class BotController:
         )
         self.checker: CheckFile = checker
 
-        self.redis: aioredis.Redis = redis_
-        self.redis_prefix: str = redis_prefix
+        self.redis = redis_
 
         self.ForwardThread: ForwardThread = forward_thread
 
@@ -263,7 +254,7 @@ class BotController:
         self.echo_switch: bool = False
         self.detail_msg_switch: bool = False
         # self.delete_blocked_message_after_blacklist: bool = False
-        self.func_blacklist: Callable[[], int] | None = None
+        self.func_blacklist: Callable[[BlackListForwardRequest], int] | None = None
         self.custom_switch: bool = False
 
         self.init_handle()
@@ -274,8 +265,6 @@ class BotController:
 
     @classmethod
     async def create(cls, config: ConfigParser):
-        redis_ = await aioredis.from_url('redis://localhost')
-        prefix = ''.join(random.choices(string.ascii_lowercase, k=5))
         checker = await CheckFile.init_instance(
             config.get('pgsql', 'host'),
             config.getint('pgsql', 'port'),
@@ -283,22 +272,14 @@ class BotController:
             config.get('pgsql', 'passwd'),
             config.get('pgsql', 'database')
         )
-        forward_thread = ForwardThread(prefix, redis_)
-        self = cls(config, redis_, checker, forward_thread, prefix)
-        await redis_.sadd(f'{self.redis_prefix}for_bypass', *await self.checker.query_all_bypass())
-        await redis_.sadd(f'{self.redis_prefix}for_blacklist', *await self.checker.query_all_blacklist())
-        await redis_.mset(await self.checker.query_all_special_forward())
-        await redis_.sadd(f'{self.redis_prefix}for_admin', *await self.checker.query_all_admin())
-        await redis_.sadd(f'{self.redis_prefix}for_admin', config.getint('account', 'owner'))
+        redis_ = await ClientRedisHelper.new(checker, config.getint('account', 'owner'))
+        forward_thread = ForwardThread(redis_)
+        self = cls(config, redis_, checker, forward_thread)
         await self.load_plugins(config)
         return self
 
     async def clean(self) -> None:
-        await self.redis.delete(f'{self.redis_prefix}for_bypass')
-        await self.redis.delete(f'{self.redis_prefix}for_blacklist')
-        await self.redis.delete(
-            ' '.join(map(str, (key for key, _ in (await self.checker.query_all_special_forward()).items()))))
-        await self.redis.delete(f'{self.redis_prefix}for_admin')
+        await self.redis.clean(await self.checker.query_all_special_forward())
 
     def init_handle(self) -> None:
         self.app.add_handler(
@@ -397,9 +378,6 @@ class BotController:
             except:
                 logger.error('Pending stop %s plugin fail', x.module_name)
 
-    async def user_checker(self, msg: Message) -> bool:
-        return await self.redis.sismember(f'{self.redis_prefix}for_admin', msg.chat.id)
-
     async def reply_checker_and_del_from_blacklist(self, client: Client, msg: Message) -> None:
         try:
             pending_del = None
@@ -410,14 +388,14 @@ class BotController:
             else:
                 group_id = msg.forward_from.id if msg.forward_from else \
                     msg.forward_from_chat.id if msg.forward_from_chat else None
-                if group_id and await self.redis.sismember(f'{self.redis_prefix}for_blacklist', group_id):
+                if group_id and await self.redis.query_blacklist(group_id):
                     pending_del = group_id
             if pending_del is not None:
-                if await self.redis.srem(f'{self.redis_prefix}for_blacklist', pending_del):
+                if await self.redis.delete_blacklist(pending_del):
                     await self.checker.remove_blacklist(pending_del)
                 await client.send_message(self.owner_group_id, f'Remove `{pending_del}` from blacklist',
                                           parse_mode='markdown')
-        except:
+        except (pyrogram.errors.RPCError, asyncpg.PostgresError, aioredis.exceptions.RedisError):
             if msg.reply_to_message.text:
                 print(msg.reply_to_message.text)
             logger.exception('Catch!')
@@ -429,26 +407,22 @@ class BotController:
                                                              f'from id:`{user_id["from_forward"]}`', 'markdown')
             user_id = user_id['from_user']
         # Check is msg from authorized user
-        if user_id is None or await self.redis.sismember(f'{self.redis_prefix}for_admin', user_id):
+        if user_id is None or await self.redis.query_admin(user_id):
             raise KeyError
-        if await self.redis.sadd(f'{self.redis_prefix}for_blacklist', user_id):
+        if await self.redis.add_blacklist(user_id):
             await self.checker.insert_blacklist(user_id)  # type: ignore
         logger.info('Add %d to blacklist', user_id)
         if post_back_id is not None:
             await self.app.send_message(post_back_id, f'Add `{user_id}` to blacklist', 'markdown')
 
     async def del_message_by_id(self, client: Client, msg: Message,
-                                send_message_to: int | str | None = None,
-                                forward_control: bool = True) -> None:
-        if forward_control and self.configure.blacklist == '':
-            logger.error('Request forward but blacklist channel not specified')
-            return
+                                send_message_to: int | str | None = None) -> None:
         id_from_reply = get_forward_id(msg.reply_to_message)
-        q = await self.checker.query('''SELECT * FROM "msg_detail"
-         WHERE ("from_chat" = $1 OR "from_user" = $2 OR "forward_from" = $3)
-         AND "to_chat" != $4''',
-                                     (id_from_reply, id_from_reply, id_from_reply,
-                                      self.configure.blacklist))  # type: ignore
+        q = await self.checker.query(
+            '''SELECT "to_chat", "to_msg" FROM "msg_detail"
+         WHERE ("from_chat" = $1 OR "from_user" = $2 OR "forward_from" = $3)''',
+            id_from_reply, id_from_reply, id_from_reply,
+        )
 
         if send_message_to:
             _msg = await client.send_message(send_message_to, f'Find {len(q)} message(s)')
@@ -458,11 +432,11 @@ class BotController:
                     await client.delete_messages(x['to_chat'], x['to_msg'])
                 except pyrogram.errors.RPCError:
                     pass
-            await self.checker.execute('''DELETE FROM "msg_detail" 
-            WHERE ("from_chat" = $1 OR "from_user" = $2 OR "forward_from" = $3) 
-            AND "to_chat" != $4''', (
-                id_from_reply, id_from_reply, id_from_reply,
-                self.configure.blacklist))  # type: ignore
+            await self.checker.execute(
+                '''DELETE FROM "msg_detail" 
+                 WHERE ("from_chat" = $1 OR "from_user" = $2 OR "forward_from" = $3)''',
+                id_from_reply, id_from_reply, id_from_reply
+            )
             await _msg.edit(f'Delete all message from `{id_from_reply}` completed.', 'markdown')
         else:
             for x in q:
@@ -483,7 +457,8 @@ class BotController:
         if re.match(r'^/(del(f)?|b|undo|print)$', msg.text):
             if msg.text == '/b':
                 for_id = await self.checker.query_forward_from(msg.chat.id, msg.reply_to_message.message_id)
-                await self.add_black_list(for_id, self.owner_group_id)
+                await self.add_black_list([for_id.from_chat, for_id.from_user,  # type: ignore
+                                           for_id.forward_from, self.owner_group_id])
                 # To enable delete message, please add `delete other messages' privilege to bot
                 call_delete_msg(30, client.delete_messages, msg.chat.id,
                                 (msg.message_id, msg.reply_to_message.message_id))
@@ -491,7 +466,7 @@ class BotController:
                 group_id = msg.reply_to_message.message_id if msg.reply_to_message else None
                 if group_id:
                     try:
-                        if await self.redis.srem(f'{self.redis_prefix}for_admin', group_id):
+                        if await self.redis.delete_admin(group_id):
                             await self.checker.remove_admin(group_id)
                         await client.send_message(self.owner_group_id, f'Remove `{group_id}` from blacklist',
                                                   'markdown')
@@ -502,7 +477,7 @@ class BotController:
             else:
                 call_delete_msg(20, client.delete_messages, msg.chat.id, msg.message_id)
                 if get_forward_id(msg.reply_to_message):
-                    await self.del_message_by_id(client, msg, self.owner_group_id, msg.text[-1] == 'f')
+                    await self.del_message_by_id(client, msg, self.owner_group_id)
 
     @staticmethod
     def get_file_unique_id(msg: Message, _type: str) -> str:
@@ -530,7 +505,7 @@ class BotController:
 
     async def pre_check(self, _client: Client, msg: Message) -> None:
         try:
-            if await self.redis.sismember(f'{self.redis_prefix}for_bypass', msg.chat.id) or \
+            if await self.redis.query_bypass(msg.chat.id) or \
                     not await self.checker.check_file(self.get_file_unique_id(msg, self.get_file_type(msg))):
                 return
         except UnsupportedType:
@@ -538,18 +513,8 @@ class BotController:
         else:
             raise ContinuePropagation
 
-    async def blacklist_checker(self, msg: Message) -> None:
-        return await self.redis.sismember(f'{self.redis_prefix}for_blacklist', msg.chat.id) or \
-               (msg.from_user and await self.redis.sismember(
-                   f'{self.redis_prefix}for_blacklist', msg.from_user.id)) or \
-               (msg.forward_from and await self.redis.sismember(
-                   f'{self.redis_prefix}for_blacklist',
-                   msg.forward_from.id)) or \
-               (msg.forward_from_chat and await self.redis.sismember(
-                   f'{self.redis_prefix}for_blacklist', msg.forward_from_chat.id))
-
     async def forward_msg(self, msg: Message, to: int, what: str = 'photo') -> None:
-        if await self.blacklist_checker(msg):
+        if await self.redis.check_msg_from_blacklist(msg):
             # if msg.from_user and msg.from_user.id == 630175608: return # block tgcn-captcha
             self.func_blacklist(
                 BlackListForwardRequest(
@@ -602,7 +567,7 @@ class BotController:
         await self.forward_msg(msg, self.configure.other, 'other')
 
     async def pre_private(self, client: Client, msg: Message) -> None:
-        if not await self.user_checker(msg):
+        if not await self.redis.check_msg_from_admin(msg):
             await client.send(raw.functions.messages.ReportSpam(peer=await client.resolve_peer(msg.chat.id)))
             return
         await client.send(raw.functions.messages.ReadHistory(peer=await client.resolve_peer(msg.chat.id),
@@ -613,7 +578,7 @@ class BotController:
         if len(msg.text) < 4:
             return
         except_id = msg.text[3:]
-        if await self.redis.sadd(f'{self.redis_prefix}for_bypass', except_id):
+        if await self.redis.add_bypass(except_id):
             await self.checker.insert_bypass(except_id)
         await msg.reply(f'Add `{except_id}` to bypass list', parse_mode='markdown')
         logger.info('add except id: %s', except_id)
@@ -661,7 +626,7 @@ class BotController:
     async def add_user(self, _client: Client, msg: Message) -> None:
         r = re.match(r'^/a (.+)$', msg.text)
         if r and r.group(1) == self.configure.authorized_code:
-            if await self.redis.sadd(f'{self.redis_prefix}for_admin', msg.chat.id):
+            if await self.redis.add_admin(msg.chat.id):
                 await self.checker.insert_admin(msg.chat.id)
             await msg.reply('Success add to authorized users.')
 

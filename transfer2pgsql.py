@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 # transfer2pgsql.py
-# Copyright (C) 2019-2021 KunoiSayami
+# Copyright (C) 2019-2022 KunoiSayami
 #
 # This module is part of Things-Forward-Telegram and is released under
 # the AGPL v3 License: https://www.gnu.org/licenses/agpl-3.0.txt

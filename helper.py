@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # helper.py
-# Copyright (C) 2020 KunoiSayami
+# Copyright (C) 2020-2022 KunoiSayami
 #
 # This module is part of Things-Forward-telegram and is released under
 # the AGPL v3 License: https://www.gnu.org/licenses/agpl-3.0.txt
@@ -20,9 +20,12 @@
 from __future__ import annotations
 
 import logging
+import random
+import string
 from collections.abc import Iterable
 from typing import Optional, Sequence, Union
 
+import aioredis
 import asyncpg
 from pyrogram.types import Photo
 
@@ -110,7 +113,7 @@ class CheckFile(PgSQLdb):
     async def query_all_special_forward(self) -> dict[str, str]:
         return {str(x['chat_id']): str(x['target']) for x in await self.query('''SELECT * FROM "special_forward"''')}
 
-    async def query_forward_from(self, chat_id: int, message_id: int) -> Optional[asyncpg.Record]:
+    async def query_forward_from(self, chat_id: int, message_id: int) -> asyncpg.Record | None:
         return await self.query1(
             '''SELECT "from_chat", "from_user", "forward_from" 
             FROM "msg_detail" WHERE "to_chat" = $1 AND "to_msg" = $2''',
@@ -132,4 +135,100 @@ class CheckFile(PgSQLdb):
     @classmethod
     async def close_instance(cls) -> None:
         await CheckFile._instance.close()
+
+
+class RedisHelper:
+
+    def __init__(self, redis_conn: aioredis.Redis, prefix: str):
+        self.conn = redis_conn
+        self.prefix = prefix
+
+    async def _basic_s_methods(self, method: str, client_id: list[int] | int) -> int:
+        if isinstance(client_id, int):
+            client_id = [client_id]
+        return await self.conn.sadd(f'{self.prefix}for_{method}', *client_id)
+
+    async def add_bypass(self, client_id: list[int] | int) -> int:
+        return await self._basic_s_methods('bypass', *client_id)
+
+    async def add_blacklist(self, client_id: list[int] | int) -> int:
+        return await self._basic_s_methods('blacklist', *client_id)
+
+    async def add_admin(self, client_id: list[int] | int) -> int:
+        return await self._basic_s_methods('admin', *client_id)
+
+    async def delete_blacklist(self, client_id: int) -> None:
+        return await self.conn.srem(f'{self.prefix}for_blacklist', client_id)
+
+    async def delete_admin(self, client_id: int) -> None:
+        return await self.conn.srem(f'{self.prefix}for_admin', client_id)
+
+    async def set(self, key: str, value: str) -> None:
+        await self.set(key, value)
+
+    async def mset(self, mp: dict[str, str]) -> None:
+        await self.conn.mset(mp)
+
+    async def clean(self, mp: dict[str, str]) -> None:
+        await self.conn.delete(f'{self.prefix}for_bypass')
+        await self.conn.delete(f'{self.prefix}for_blacklist')
+        await self.conn.delete(
+            ' '.join(map(str, (key for key, _ in mp.items()))))
+        await self.conn.delete(f'{self.prefix}for_admin')
+
+    async def _basic_s_query(self, method: str, client_id: int) -> bool:
+        return await self.conn.sismember(f'{self.prefix}for_{method}', client_id)
+
+    async def query_admin(self, client_id: int) -> bool:
+        return await self._basic_s_query('admin', client_id)
+
+    async def query_blacklist(self, client_id: int) -> bool:
+        return await self._basic_s_query('blacklist', client_id)
+
+    async def query_bypass(self, client_id: int) -> bool:
+        return await self._basic_s_query('bypass', client_id)
+
+    async def query_channel_mapping(self, client_id: int) -> int | None:
+        if result := await self.conn.get(f'{client_id}'):
+            return int(result)
+        return None
+
+    async def get(self, key: str) -> bytes | None:
+        return await self.conn.get(key)
+
+    @classmethod
+    async def new(cls, sql_conn: CheckFile, owner: int = 0) -> RedisHelper:
+        redis_ = await aioredis.from_url('redis://localhost')
+        prefix = ''.join(random.choices(string.ascii_lowercase, k=5))
+        self = cls(redis_, prefix)
+        await self.add_admin(await sql_conn.query_all_admin())
+        await self.add_blacklist(await sql_conn.query_all_blacklist())
+        await self.add_bypass(await sql_conn.query_all_bypass())
+        await self.mset(await sql_conn.query_all_special_forward())
+        if owner != 0:
+            await self.add_admin(owner)
+        return self
+
+    async def close(self) -> None:
+        await self.conn.close()
+
+
+class ClientRedisHelper(RedisHelper):
+    from pyrogram.types import Message
+
+    async def check_msg_from_blacklist(self, msg: Message) -> bool:
+        if await self.query_blacklist(msg.chat.id):
+            return True
+        if msg.from_user and self.query_blacklist(msg.from_user.id):
+            return True
+        if msg.sender_chat and self.query_blacklist(msg.sender_chat.id):
+            return True
+        if msg.forward_from and self.query_blacklist(msg.forward_from.id):
+            return True
+        if msg.forward_from_chat and self.query_blacklist(msg.forward_from_chat.id):
+            return True
+        return False
+
+    async def check_msg_from_admin(self, msg: Message) -> bool:
+        return await self.query_admin(msg.chat.id)
 

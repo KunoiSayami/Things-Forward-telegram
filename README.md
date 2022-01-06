@@ -1,20 +1,16 @@
 # Message-Forwarding Bot
 
-## DUE TO MY ACCOUNT GOT TELEGRAM BANNED, THIS PROJECT IS NO LONGER MAINTENANCE
-
-Automatically forward the target message
-
 ## Note
 
 This major version is not compatible with previous major versions.
 
 Technical support for previous versions is no longer provided.
 
-If you want to upate to the latest version, please update the configuration file according to `config.ini.default`.
+If you want to update to the latest version, please update the configuration file according to `config.ini.default`.
 
 ## Operating Environment
 
-Python 3.7 and above is required
+Python 3.9 and above is required
 
 The following libraries are required:
 
@@ -50,7 +46,7 @@ The following libraries are required:
 
 [![](https://www.gnu.org/graphics/agplv3-155x51.png)](https://www.gnu.org/licenses/agpl-3.0.txt)
 
-Copyright (C) 2018-2021 KunoiSayami
+Copyright (C) 2018-2022 KunoiSayami
 
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or any later version.
 

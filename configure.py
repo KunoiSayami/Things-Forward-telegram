@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # configure.py
-# Copyright (C) 2020 KunoiSayami
+# Copyright (C) 2020-2022 KunoiSayami
 #
 # This module is part of Things-Forward-telegram and is released under
 # the AGPL v3 License: https://www.gnu.org/licenses/agpl-3.0.txt
@@ -73,14 +73,6 @@ class Configure:
     @property
     def bot_for(self) -> int:
         return self._bot_for
-
-    @property
-    def blacklist(self) -> Optional[int]:
-        warnings.warn(
-            'This option is deprecated',
-            DeprecationWarning
-        )
-        return self._to_blacklist
 
     @property
     def query_photo(self) -> int:
