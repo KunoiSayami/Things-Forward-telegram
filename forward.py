@@ -515,15 +515,6 @@ class BotController:
 
     async def forward_msg(self, msg: Message, to: int, what: str = 'photo') -> None:
         if await self.redis.check_msg_from_blacklist(msg):
-            # if msg.from_user and msg.from_user.id == 630175608: return # block tgcn-captcha
-            self.func_blacklist(
-                BlackListForwardRequest(
-                    msg,
-                    LogStruct(
-                        True, 'forward blacklist context %s from %s (id: %d)', what, msg.chat.title, msg.chat.id
-                    )
-                )
-            )
             return
         forward_target = to
         # spec_target = None if what == 'other' else await self.redis.get(f'{self.redis_prefix}{msg.chat.id}')
@@ -593,7 +584,7 @@ class BotController:
     async def handle_add_black_list(self, _client: Client, msg: Message) -> None:
         try:
             await self.add_black_list(msg.text[3:])
-        except:
+        except (ValueError, IndexError):
             await msg.reply("Check your input")
             logger.exception('Catch!')
 

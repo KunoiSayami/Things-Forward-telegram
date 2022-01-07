@@ -149,13 +149,13 @@ class RedisHelper:
         return await self.conn.sadd(f'{self.prefix}for_{method}', *client_id)
 
     async def add_bypass(self, client_id: list[int] | int) -> int:
-        return await self._basic_s_methods('bypass', *client_id)
+        return await self._basic_s_methods('bypass', client_id)
 
     async def add_blacklist(self, client_id: list[int] | int) -> int:
-        return await self._basic_s_methods('blacklist', *client_id)
+        return await self._basic_s_methods('blacklist', client_id)
 
     async def add_admin(self, client_id: list[int] | int) -> int:
-        return await self._basic_s_methods('admin', *client_id)
+        return await self._basic_s_methods('admin', client_id)
 
     async def delete_blacklist(self, client_id: int) -> None:
         return await self.conn.srem(f'{self.prefix}for_blacklist', client_id)
@@ -219,13 +219,13 @@ class ClientRedisHelper(RedisHelper):
     async def check_msg_from_blacklist(self, msg: Message) -> bool:
         if await self.query_blacklist(msg.chat.id):
             return True
-        if msg.from_user and self.query_blacklist(msg.from_user.id):
+        if msg.from_user and await self.query_blacklist(msg.from_user.id):
             return True
-        if msg.sender_chat and self.query_blacklist(msg.sender_chat.id):
+        if msg.sender_chat and await self.query_blacklist(msg.sender_chat.id):
             return True
-        if msg.forward_from and self.query_blacklist(msg.forward_from.id):
+        if msg.forward_from and await self.query_blacklist(msg.forward_from.id):
             return True
-        if msg.forward_from_chat and self.query_blacklist(msg.forward_from_chat.id):
+        if msg.forward_from_chat and await self.query_blacklist(msg.forward_from_chat.id):
             return True
         return False
 
