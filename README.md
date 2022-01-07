@@ -20,14 +20,14 @@ The following libraries are required:
 
 ## Feature
 
-* Support any media except voice messges.
+* Support any media except voice messages.
 * Use PostgreSQL engine to check if the target media is duplicated.
 * Collect all the videos and pictures from the target group or channel.
 * Customized forwarding methods including Blacklist.
 * The time interval for message forwarding is customized to avoid certain risks including banned accounts.
 * Logging function is supported.
 * Prevent possible loss of configuration files by writing configuration files by command at runtime.
-* Set up forwarding and recover blacklists in a more convenient way.
+* Set up forwarding in a more convenient way.
 * Forward the warning messages in the log to a specified group.
 * Document channel only handles forwarding video and image files.
 * If you have the authorized password, you can send authorized code to the bot account to get the permission.

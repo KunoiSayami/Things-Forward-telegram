@@ -116,15 +116,8 @@ class ForwardThread:
                     self.logger.info(request.log.fmt_log, *request.log.fmt_args)
             except pyrogram.errors.exceptions.bad_request_400.MessageIdInvalid:
                 pass
-            except pyrogram.errors.BadRequest as e:
-                if 'CHAT_FORWARDS_RESTRICTED' in e.x:
-                    await asyncio.gather(
-                        self.checker.insert_bypass(request.msg.chat.id),
-                        self.redis.add_bypass(request.msg.chat.id)
-                    )
-                    logger.error('Got forward restricted group: %d, add to skip list', request.msg.chat.id)
             except pyrogram.errors.RPCError:
-                if request.msg and await self.redis.query_blacklist(request.target_id):
+                if request.msg:
                     print(repr(request.msg))
                 # self.put(target_id, chat_id, msg_id, request.log, msg_raw)
                 logger.exception('Got other exceptions in forward thread')
@@ -514,6 +507,8 @@ class BotController:
             raise ContinuePropagation
 
     async def forward_msg(self, msg: Message, to: int, what: str = 'photo') -> None:
+        if msg.has_protected_content:
+            return
         if await self.redis.check_msg_from_blacklist(msg):
             return
         forward_target = to
