@@ -19,9 +19,8 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 from __future__ import annotations
 
-import warnings
 from configparser import ConfigParser
-from typing import List, Optional
+from typing import Optional
 
 
 class Configure:

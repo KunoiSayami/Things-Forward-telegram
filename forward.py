@@ -30,6 +30,7 @@ import aioredis.exceptions
 import asyncpg
 import pyrogram.errors
 from pyrogram import Client, filters, raw, ContinuePropagation
+from pyrogram.enums import ParseMode, ChatAction
 from pyrogram.handlers import MessageHandler
 from pyrogram.types import Message
 
@@ -106,9 +107,9 @@ class ForwardThread:
                 r = await request.msg.forward(request.target_id, True)
                 await self.checker.insert_log(
                     r.chat.id,
-                    r.message_id,
+                    r.id,
                     request.msg.chat.id,
-                    request.msg.message_id,
+                    request.msg.id,
                     get_msg_from(request.msg),
                     get_forward_id(request.msg, -1)
                 )
@@ -139,10 +140,10 @@ class SetTypingCoroutine:
 
     async def _run(self) -> None:
         while self.switch:
-            await self.client.send_chat_action(self.chat_id, 'TYPING')
+            await self.client.send_chat_action(self.chat_id, ChatAction.TYPING)
             # After 5 seconds, chat action will canceled automatically
             await asyncio.sleep(4.5)
-        await self.client.send_chat_action(self.chat_id, 'CANCEL')
+        await self.client.send_chat_action(self.chat_id, ChatAction.CANCEL)
 
 
 class GetHistoryCoroutine:
@@ -164,7 +165,7 @@ class GetHistoryCoroutine:
     async def run(self) -> None:
         check_func = self.checker.check_file if not self.dirty_run else self.checker.check_file_dirty
         photos, videos, docs = [], [], []
-        msg_group = await self.client.get_history(self.target_id, offset_id=self.offset_id)
+        msg_group = [msg async for msg in self.client.get_chat_history(self.target_id, offset_id=self.offset_id, limit=1)]
         await self.client.send_message(
             self.chat_id,
             'Now process query {}, total {} messages{}'.format(
@@ -194,10 +195,11 @@ class GetHistoryCoroutine:
                 logger.info('Query channel end by message_id %d', self.offset_id + 1)
                 break
             try:
-                msg_group = await self.client.get_history(self.target_id, offset_id=self.offset_id)
+                msg_group = [msg async for msg in
+                             self.client.get_chat_history(self.target_id, offset_id=self.offset_id, limit=100)]
             except pyrogram.errors.FloodWait as e:
-                logger.warning('Got flood wait, sleep %d seconds', e.x)
-                await asyncio.sleep(e.x)
+                logger.warning('Got flood wait, sleep %d seconds', e.value)
+                await asyncio.sleep(e.value)
         if not self.dirty_run:
             await self.client.send_message(self.configure.query_photo, f'Begin {self.target_id} forward')
             await self.client.send_message(self.configure.query_video, f'Begin {self.target_id} forward')
@@ -387,7 +389,7 @@ class BotController:
                 if await self.redis.delete_blacklist(pending_del):
                     await self.checker.remove_blacklist(pending_del)
                 await client.send_message(self.owner_group_id, f'Remove `{pending_del}` from blacklist',
-                                          parse_mode='markdown')
+                                          parse_mode=ParseMode.MARKDOWN)
         except (pyrogram.errors.RPCError, asyncpg.PostgresError, aioredis.exceptions.RedisError):
             if msg.reply_to_message.text:
                 print(msg.reply_to_message.text)
@@ -397,7 +399,7 @@ class BotController:
         if isinstance(user_id, dict):
             await self.app.send_message(self.owner_group_id, f'User id:`{user_id["from_user"]}`\nFrom '
                                                              f'chat id:`{user_id["from_chat"]}`\nForward '
-                                                             f'from id:`{user_id["from_forward"]}`', 'markdown')
+                                                             f'from id:`{user_id["from_forward"]}`', ParseMode.MARKDOWN)
             user_id = user_id['from_user']
         # Check is msg from authorized user
         if user_id is None or await self.redis.query_admin(user_id):
@@ -406,7 +408,7 @@ class BotController:
             await self.checker.insert_blacklist(user_id)  # type: ignore
         logger.info('Add %d to blacklist', user_id)
         if post_back_id is not None:
-            await self.app.send_message(post_back_id, f'Add `{user_id}` to blacklist', 'markdown')
+            await self.app.send_message(post_back_id, f'Add `{user_id}` to blacklist', ParseMode.MARKDOWN)
 
     async def del_message_by_id(self, client: Client, msg: Message,
                                 send_message_to: int | str | None = None) -> None:
@@ -430,14 +432,14 @@ class BotController:
                  WHERE ("from_chat" = $1 OR "from_user" = $2 OR "forward_from" = $3)''',
                 id_from_reply, id_from_reply, id_from_reply
             )
-            await _msg.edit(f'Delete all message from `{id_from_reply}` completed.', 'markdown')
+            await _msg.edit(f'Delete all message from `{id_from_reply}` completed.', ParseMode.MARKDOWN)
         else:
             for x in q:
                 try:
                     await client.delete_messages(x['to_chat'], x['to_msg'])
                 except pyrogram.errors.RPCError:
                     pass
-            await msg.reply(f'Delete all message from `{id_from_reply}` completed.', False, 'markdown')
+            await msg.reply(f'Delete all message from `{id_from_reply}` completed.', False, ParseMode.MARKDOWN)
 
     async def get_msg_from_owner_group(self, client: Client, msg: Message) -> None:
         try:
@@ -449,26 +451,27 @@ class BotController:
     async def get_command_from_target(self, client: Client, msg: Message) -> None:
         if re.match(r'^/(del(f)?|b|undo|print)$', msg.text):
             if msg.text == '/b':
-                for_id = await self.checker.query_forward_from(msg.chat.id, msg.reply_to_message.message_id)
+                for_id = await self.checker.query_forward_from(msg.chat.id, msg.reply_to_message.id)
                 await self.add_black_list([for_id.from_chat, for_id.from_user,  # type: ignore
                                            for_id.forward_from, self.owner_group_id])
                 # To enable delete message, please add `delete other messages' privilege to bot
                 call_delete_msg(30, client.delete_messages, msg.chat.id,
-                                (msg.message_id, msg.reply_to_message.message_id))
+                                (msg.id, msg.reply_to_message.id))
             elif msg.text == '/undo':
-                group_id = msg.reply_to_message.message_id if msg.reply_to_message else None
+                group_id = msg.reply_to_message.id if msg.reply_to_message else None
                 if group_id:
                     try:
                         if await self.redis.delete_admin(group_id):
                             await self.checker.remove_admin(group_id)
                         await client.send_message(self.owner_group_id, f'Remove `{group_id}` from blacklist',
-                                                  'markdown')
+                                                  ParseMode.MARKDOWN)
                     except ValueError:
-                        await client.send_message(self.owner_group_id, f'`{group_id}` not in blacklist', 'markdown')
+                        await client.send_message(self.owner_group_id, f'`{group_id}` not in blacklist',
+                                                  ParseMode.MARKDOWN)
             elif msg.text == '/print' and msg.reply_to_message is not None:
                 print(msg.reply_to_message)
             else:
-                call_delete_msg(20, client.delete_messages, msg.chat.id, msg.message_id)
+                call_delete_msg(20, client.delete_messages, msg.chat.id, msg.id)
                 if get_forward_id(msg.reply_to_message):
                     await self.del_message_by_id(client, msg, self.owner_group_id)
 
@@ -554,10 +557,10 @@ class BotController:
 
     async def pre_private(self, client: Client, msg: Message) -> None:
         if not await self.redis.check_msg_from_admin(msg):
-            await client.send(raw.functions.messages.ReportSpam(peer=await client.resolve_peer(msg.chat.id)))
+            await client.invoke(raw.functions.messages.ReportSpam(peer=await client.resolve_peer(msg.chat.id)))
             return
-        await client.send(raw.functions.messages.ReadHistory(peer=await client.resolve_peer(msg.chat.id),
-                                                             max_id=msg.message_id))
+        await client.invoke(raw.functions.messages.ReadHistory(peer=await client.resolve_peer(msg.chat.id),
+                                                               max_id=msg.id))
         raise ContinuePropagation
 
     async def handle_add_bypass(self, _client: Client, msg: Message) -> None:
@@ -566,7 +569,7 @@ class BotController:
         except_id = msg.text[3:]
         if await self.redis.add_bypass(except_id):
             await self.checker.insert_bypass(except_id)
-        await msg.reply(f'Add `{except_id}` to bypass list', parse_mode='markdown')
+        await msg.reply(f'Add `{except_id}` to bypass list', parse_mode=ParseMode.MARKDOWN)
         logger.info('add except id: %s', except_id)
 
     @staticmethod
@@ -607,7 +610,7 @@ class BotController:
     async def _set_forward_target(self, chat_id: int, target: str, msg: Message) -> None:
         await self.redis.set(str(chat_id), target)
         await self.checker.update_forward_target(chat_id, target)
-        await msg.reply(f'Set group `{chat_id}` forward to `{target}`', parse_mode='markdown')
+        await msg.reply(f'Set group `{chat_id}` forward to `{target}`', parse_mode=ParseMode.MARKDOWN)
 
     async def add_user(self, _client: Client, msg: Message) -> None:
         r = re.match(r'^/a (.+)$', msg.text)
@@ -643,16 +646,17 @@ class BotController:
         /s                      Toggle echo switch
         /f <chat_id> <target>   Add `chat_id' to specified forward rules
         /pw <new_password>      Change password to new password
-        """, parse_mode='text')
+        """, parse_mode=ParseMode.DISABLED)
 
     async def process_private(self, _client: Client, msg: Message) -> None:
         if self.custom_switch:
             obj = getattr(msg, self.get_file_type(msg), None)
             if obj:
                 await msg.reply('```{}```\n{}'.format(str(obj), 'Resolution: `{}`'.format(msg.photo.file_size / (
-                        msg.photo.width * msg.photo.height) * 1000) if msg.photo else ''), parse_mode='markdown')
+                        msg.photo.width * msg.photo.height) * 1000) if msg.photo else ''),
+                                parse_mode=ParseMode.MARKDOWN)
         if self.echo_switch:
-            await msg.reply('forward_from = `{}`'.format(get_forward_id(msg, -1)), parse_mode='markdown')
+            await msg.reply('forward_from = `{}`'.format(get_forward_id(msg, -1)), parse_mode=ParseMode.MARKDOWN)
             if self.detail_msg_switch:
                 print(msg)
         if msg.text is None:

@@ -29,7 +29,7 @@ T = TypeVar('T')
 
 def get_msg_key(msg: Message, key1: str, key2: str, fallback: T = None) -> T:
     try:
-        return msg[key1][key2]
+        return getattr(getattr(msg, key1), key2)
     except (AttributeError, ValueError):
         return fallback
 
