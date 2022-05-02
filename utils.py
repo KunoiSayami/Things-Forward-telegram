@@ -24,7 +24,7 @@ from pyrogram.types import Message
 from configure import ConfigParser
 from helper import CheckFile
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 def get_msg_key(msg: Message, key1: str, key2: str, fallback: T = None) -> T:
@@ -47,10 +47,12 @@ def get_msg_from(msg: Message) -> int:
 
 
 def is_bot(msg: Message) -> bool:
-    return any((
-        msg.from_user and msg.from_user.is_bot,
-        msg.forward_from and msg.forward_from.is_bot
-    ))
+    return any(
+        (
+            msg.from_user and msg.from_user.is_bot,
+            msg.forward_from and msg.forward_from.is_bot,
+        )
+    )
 
 
 class LogStruct:
@@ -61,7 +63,7 @@ class LogStruct:
 
 
 class BasicForwardRequest:
-    def __init__(self, msg: Message, log: LogStruct = LogStruct(False, '')):
+    def __init__(self, msg: Message, log: LogStruct = LogStruct(False, "")):
         self.msg = msg
         self.log = log
 
@@ -71,8 +73,9 @@ class BlackListForwardRequest(BasicForwardRequest):
 
 
 class ForwardRequest(BasicForwardRequest):
-
-    def __init__(self, target_id: int, msg: Message, log: LogStruct = LogStruct(False, '')):
+    def __init__(
+        self, target_id: int, msg: Message, log: LogStruct = LogStruct(False, "")
+    ):
         super().__init__(msg, log)
         self.target_id = target_id
 
@@ -82,7 +85,6 @@ class ForwardRequest(BasicForwardRequest):
 
 
 class Plugin:
-
     @classmethod
     async def create_plugin(cls, *_args) -> Plugin:
         self = cls()
@@ -112,12 +114,17 @@ class _Requirement:
 
 
 class PluginLoader:
-
-    def __init__(self, module: _PluginModule, module_name: str, client: Client, config: ConfigParser,
-                 database: CheckFile):
+    def __init__(
+        self,
+        module: _PluginModule,
+        module_name: str,
+        client: Client,
+        config: ConfigParser,
+        database: CheckFile,
+    ):
         self.requirement: dict[str, bool] = module.requirement
         self.args: list[T] = [client]
-        _requirement = _Requirement(self.requirement.get('config'), self.requirement.get('database'))  # type: ignore
+        _requirement = _Requirement(self.requirement.get("config"), self.requirement.get("database"))  # type: ignore
         if _requirement.config:
             self.args.append(config)
         if _requirement.database:
@@ -131,5 +138,7 @@ class PluginLoader:
         return self.instance
 
     async def create_instance(self) -> PluginLoader:
-        self.instance = await getattr(self.module, self.module_name).create_plugin(*self.args)
+        self.instance = await getattr(self.module, self.module_name).create_plugin(
+            *self.args
+        )
         return self

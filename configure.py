@@ -25,21 +25,21 @@ from typing import Optional
 
 class Configure:
     def __init__(self, config: ConfigParser):
-        self._to_photo = config.getint('forward', 'to_photo')
-        self._to_video = config.getint('forward', 'to_video')
-        self._to_other = config.getint('forward', 'to_other')
-        self._to_anime = config.getint('forward', 'to_anime')
-        self._to_doc = config.getint('forward', 'to_doc')
-        self._to_gif = config.getint('forward', 'to_gif')
-        self._to_lowq = config.getint('forward', 'to_lowq')
-        self._bot_for = config.getint('forward', 'bot_for')
-        self._to_blacklist = config.getint('forward', 'to_blacklist', fallback=None)
+        self._to_photo = config.getint("forward", "to_photo")
+        self._to_video = config.getint("forward", "to_video")
+        self._to_other = config.getint("forward", "to_other")
+        self._to_anime = config.getint("forward", "to_anime")
+        self._to_doc = config.getint("forward", "to_doc")
+        self._to_gif = config.getint("forward", "to_gif")
+        self._to_lowq = config.getint("forward", "to_lowq")
+        self._bot_for = config.getint("forward", "bot_for")
+        self._to_blacklist = config.getint("forward", "to_blacklist", fallback=None)
 
-        self._query_photo = config.getint('forward', 'query_photo', fallback=-1)
-        self._query_video = config.getint('forward', 'query_video', fallback=-1)
-        self._query_doc = config.getint('forward', 'query_doc', fallback=-1)
+        self._query_photo = config.getint("forward", "query_photo", fallback=-1)
+        self._query_video = config.getint("forward", "query_video", fallback=-1)
+        self._query_doc = config.getint("forward", "query_doc", fallback=-1)
 
-        self._authorized_code = config.get('account', 'auth_code', fallback=None)
+        self._authorized_code = config.get("account", "auth_code", fallback=None)
 
     @property
     def photo(self) -> int:
@@ -95,7 +95,16 @@ class Configure:
 
     @property
     def predefined_group_list(self) -> list[int]:
-        return [self.photo, self.video, self.other, self.anime, self.doc, self.gif, self.lowq, self.bot_for]
+        return [
+            self.photo,
+            self.video,
+            self.other,
+            self.anime,
+            self.doc,
+            self.gif,
+            self.lowq,
+            self.bot_for,
+        ]
 
     _instance = None
 
