@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # forward.py
-# Copyright (C) 2018-2022 KunoiSayami
+# Copyright (C) 2018-2023 KunoiSayami
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by
@@ -26,8 +26,8 @@ from configparser import ConfigParser
 from dataclasses import dataclass
 from typing import Callable, Coroutine
 
-import aioredis.exceptions
 import asyncpg
+import redis.exceptions
 import pyrogram.errors
 from pyrogram import Client, filters, raw, ContinuePropagation
 from pyrogram.enums import ParseMode, ChatAction
@@ -80,7 +80,7 @@ class ForwardThread:
         `target_id` : Forward to where
         `chat_id` : Forward from
         `msg_id` : Forward from message id
-        `Loginfo` structure: (need_log: bool, log_msg: str, args: tulpe)
+        `Loginfo` structure: (need_log: bool, log_msg: str, args: tuple)
     """
 
     def __init__(self, redis_conn: ClientRedisHelper):
@@ -160,7 +160,7 @@ class SetTypingCoroutine:
     async def _run(self) -> None:
         while self.switch:
             await self.client.send_chat_action(self.chat_id, ChatAction.TYPING)
-            # After 5 seconds, chat action will canceled automatically
+            # After 5 seconds, chat action will cancel automatically
             await asyncio.sleep(4.5)
         await self.client.send_chat_action(self.chat_id, ChatAction.CANCEL)
 
@@ -583,13 +583,13 @@ class BotController:
         except (
             pyrogram.errors.RPCError,
             asyncpg.PostgresError,
-            aioredis.exceptions.RedisError,
+            redis.exceptions.RedisError,
         ):
             if msg.reply_to_message.text:
                 print(msg.reply_to_message.text)
             logger.exception("Catch!")
 
-    async def add_black_list(self, user_id: int | dict, post_back_id=None) -> None:
+    async def add_black_list(self, user_id: int | dict | list[int], post_back_id=None) -> None:
         if isinstance(user_id, dict):
             await self.app.send_message(
                 self.owner_group_id,

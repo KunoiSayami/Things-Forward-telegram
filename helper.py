@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # helper.py
-# Copyright (C) 2020-2022 KunoiSayami
+# Copyright (C) 2020-2023 KunoiSayami
 #
 # This module is part of Things-Forward-telegram and is released under
 # the AGPL v3 License: https://www.gnu.org/licenses/agpl-3.0.txt
@@ -25,7 +25,7 @@ import string
 from collections.abc import Iterable
 from typing import Optional, Sequence, Union
 
-import aioredis
+from redis import asyncio as aioredis
 import asyncpg
 from pyrogram.types import Photo
 
@@ -212,10 +212,12 @@ class RedisHelper:
         return await self._basic_s_methods("admin", client_id)
 
     async def delete_blacklist(self, client_id: int) -> None:
-        return await self.conn.srem(f"{self.prefix}for_blacklist", client_id)
+        await self.conn.srem(f"{self.prefix}for_blacklist", client_id)
+        return
 
     async def delete_admin(self, client_id: int) -> None:
-        return await self.conn.srem(f"{self.prefix}for_admin", client_id)
+        await self.conn.srem(f"{self.prefix}for_admin", client_id)
+        return
 
     async def set(self, key: str, value: str) -> None:
         await self.set(key, value)

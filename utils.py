@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # utils.py
-# Copyright (C) 2018-2022 KunoiSayami
+# Copyright (C) 2018-2023 KunoiSayami
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by

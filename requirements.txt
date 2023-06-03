@@ -1,4 +1,4 @@
-aiofiles~=0.8.0
-asyncpg~=0.25.0
-Pyrogram~=2.0.13
-aioredis~=2.0.0
+aiofiles~=23.1.0
+asyncpg~=0.27.0
+Pyrogram~=2.0.106
+redis~=4.5.5
